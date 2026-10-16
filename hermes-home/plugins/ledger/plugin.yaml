@@ -1,0 +1,9 @@
+name: ledger
+version: 0.1.0
+description: 喵团记账：记收支、查汇总、维护记账记忆（账本与 App 记账面板共用 $HERMES_HOME/ledger/）
+author: CatTuan
+provides_tools:
+  - ledger_add
+  - ledger_query
+  - ledger_delete
+  - ledger_memory

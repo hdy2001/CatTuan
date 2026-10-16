@@ -1,0 +1,38 @@
+# ---- 密钥和本机配置：永远不进仓库 ----
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ---- 系统 / 编辑器 ----
+.DS_Store
+.vscode/
+.idea/
+__pycache__/
+*.pyc
+*.log
+*.out
+
+# ---- App：运行时数据（聊天记录、上传的图、浏览回放、备份） ----
+app/data/
+
+# ---- 沙箱：浏览器登录态（cookie）、截图、依赖、打过补丁的 Chrome ----
+sandbox/profile/
+sandbox/shots/
+sandbox/node_modules/
+sandbox/chrome/
+
+# ---- Hermes 主目录：只放代码和配置（白名单），其余都是运行时数据 ----
+# 聊天数据库、记忆（用户画像）、账本、关注列表、日志、缓存、生成的网站、自动装的技能都不进仓库
+hermes-home/*
+!hermes-home/config.yaml
+!hermes-home/SOUL.md
+!hermes-home/.env.example
+!hermes-home/plugins/
+!hermes-home/skills/
+hermes-home/skills/*
+!hermes-home/skills/cattuan/
+
+# agent 根据你自己的任务存下来的调研资料（例如某次深度搜索的数据），属于个人数据，留在本机
+hermes-home/skills/cattuan/*/references/

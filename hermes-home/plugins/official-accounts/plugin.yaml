@@ -1,0 +1,8 @@
+name: official-accounts
+version: 0.2.0
+description: 通过 CatTuan 沙箱浏览器只读读取各平台公开账号（微博 / X / Instagram / Weverse / B 站 / 小红书）的最新帖子，并按关键词搜小红书笔记
+author: CatTuan
+provides_tools:
+  - official_account
+  - official_photos
+  - xiaohongshu_search

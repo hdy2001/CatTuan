@@ -1,0 +1,15 @@
+{
+  "name": "喵团 · LongCat 个人助理",
+  "short_name": "喵团",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f7f5",
+  "theme_color": "#28925f",
+  "icons": [
+    {
+      "src": "longcat-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}
