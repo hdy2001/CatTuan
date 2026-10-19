@@ -20,8 +20,8 @@
       </button>
       <div class="toptitle">
         <b id="topTitle">喵团</b>
-        <!-- 状态：喵团（主 agent）正在做的那一步，比如「上网搜「…」」；没事做时显示在线 / 后台任务数。点开是「喵团动态」 -->
-        <button type="button" id="statusBtn" class="status" aria-label="查看喵团动态"><i id="dot"></i><span id="statusText">连接中…</span></button>
+        <!-- 状态：喵团（主 agent）正在做的那一步，比如「上网搜「…」」；没事做时显示在线 / 后台任务数 -->
+        <div id="topStatus" class="status"><i id="dot"></i><span id="statusText">连接中…</span></div>
       </div>
       <span class="topbtn" aria-hidden="true"></span>
     </header>
@@ -152,18 +152,6 @@
     </div>
   </div>
 
-  <!-- 喵团动态（仿 Muse Activity）：主 agent 每件事一条，正在做的显示当前步骤；上面列出后台在跑的任务 -->
-  <div id="activitySheet" class="sheet" hidden>
-    <div class="sheetbody" role="dialog" aria-label="喵团动态">
-      <header class="sheethead">
-        <strong>喵团动态</strong>
-        <button type="button" class="sheetclose" data-close-sheet aria-label="关闭">×</button>
-      </header>
-      <div class="actsub">喵团自己做的每件事：回消息、上网搜、派任务、转述结果、推目标进展。后台任务的详细步骤在「后台任务」里。</div>
-      <div id="activityList" class="activity"></div>
-    </div>
-  </div>
-
   <!-- 侧边栏：搜索聊天记录、新建对话、目标、后台任务、按今天 / 昨天 / 更早分组的聊天记录 -->
   <div id="drawer" class="drawer" hidden>
     <div class="drawerwrap">
@@ -181,9 +169,6 @@
         </button>
         <button type="button" class="drow" data-goto-view="tasks">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l1.5 1.5L8 6M4 13l1.5 1.5L8 12M11 7h9M11 13h9M11 19h9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>后台任务<b id="taskBadge" class="dbadge" hidden></b>
-        </button>
-        <button type="button" class="drow" data-open-activity>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2.5-6 5 12 2.5-6h4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>喵团动态<span id="actBadge" class="dmeta"></span>
         </button>
         <div class="dsep"></div>
         <div class="dgroup">喵团档案</div>

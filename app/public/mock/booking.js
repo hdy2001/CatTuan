@@ -94,25 +94,22 @@ const bot = (text, extra) => push({ role: 'bot', text, ...extra });
 const msgWith = (type) => [...api.S.messages].reverse().find((m) => m.booking?.type === type);
 const msgOf = (el) => api.S.messages.find((m) => m.id === el.closest('[data-mid]')?.dataset.mid);
 
-// 喵团（主 agent）回一句话：和真的 App 一样记一条动态 —— 聊天里只显示「…」，做到哪一步在顶栏状态里，「喵团动态」里有过程。
+// 喵团（主 agent）回一句话：和真的 App 一样 —— 聊天里只显示「…」，做到哪一步在顶栏状态里。
 // steps：[文字, 毫秒]，比如 [['想想怎么回', 800], ['上网搜「…」', 1500]]；title 不传就用用户最后说的那句话
 async function reply(fn, ms = 800, { steps = [['想想怎么回', ms]], title } = {}) {
-  const vtNow = () => new Date(R.vt).toISOString();
-  const a = { id: `a_mock_${++seq}`, kind: 'message', replyIn: 'mock', status: 'running', step: '', steps: [], at: vtNow(),
+  const a = { id: `a_mock_${++seq}`, kind: 'message', replyIn: 'mock', status: 'running', step: '',
     title: title || [...api.S.messages].reverse().find((m) => m.role === 'me')?.text || '回复' };
   api.S.activity.push(a);
   for (const [text, t] of steps) {
     Object.assign(a, { step: text });
-    a.steps.push({ at: vtNow(), text });
     if (!instant) { api.render(); await wait(t); }
   }
-  const first = api.S.messages.length;
   await fn();
-  Object.assign(a, { status: 'done', step: '', endedAt: vtNow(), outcome: api.S.messages.slice(first).find((m) => m.role === 'bot' && m.text)?.text || '' });
+  Object.assign(a, { status: 'done', step: '' });
   api.render();
 }
 
-// 电话任务做完，喵团转述结果（和真的 App 一样是一条「转述」动态）
+// 电话任务做完，喵团转述结果（和真的 App 一样，顶栏显示「写消息…」）
 const relay = (t = R.task) => ({ title: `转述「${t.title}」的结果`, steps: [['写消息', 1000]] });
 
 // 一句一句发（像真的 App 那样中间停一下）；前几条带 partOf，只在最后一条下面显示时间

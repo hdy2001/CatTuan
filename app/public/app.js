@@ -375,7 +375,7 @@ function taskCard(t) {
   </article>`;
 }
 
-// 调试用：开了 Langfuse（scripts/start-langfuse.sh）才有。任务链到 Langfuse 会话 task-<id>（调度者 + 执行 agent 的完整轨迹），动态链到它那条 trace。
+// 调试用：开了 Langfuse（scripts/start-langfuse.sh）才有。任务链到 Langfuse 会话 task-<id>（调度者 + 执行 agent 的完整轨迹）。
 const traceLink = (path) => (S.traceBase ? `<a class="alink" href="${esc(`${S.traceBase}/${path}`)}" target="_blank" rel="noopener">轨迹 ›</a>` : '');
 
 // 用户中途 / 做完后提的修改，以及每条的去向
@@ -421,7 +421,6 @@ function renderTasks() {
   $('#taskBadge').hidden = !active;
   $('#taskBadge').textContent = `${active} 进行中`;
   setStatusText();
-  renderActivity();
 }
 
 // ---------- 目标 ----------
@@ -541,11 +540,12 @@ function connect() {
       if (!document.querySelector(`[data-bimg="${ev.taskId}"]`)) { renderTV(); renderTasks(); }
       paintLive(ev.taskId);
     } else if (ev.type === 'activity') {
+      // 喵团手上的事：在做的按开始的先后留着（顶栏显示最新那件），做完的去掉
       const list = (S.activity ||= []);
       const i = list.findIndex((a) => a.id === ev.activity.id);
-      if (i >= 0) list[i] = ev.activity; else list.push(ev.activity);
+      if (ev.activity.status !== 'running') { if (i >= 0) list.splice(i, 1); }
+      else if (i >= 0) list[i] = ev.activity; else list.push(ev.activity);
       setStatusText();
-      renderActivity();
       renderChat(); // 聊天里的「…」跟着主 agent 有没有在干活走
     } else if (ev.type === 'goal') {
       const i = S.goals.findIndex((g) => g.id === ev.goal.id);
@@ -579,60 +579,12 @@ function setStatusText() {
   const now = busy.at(-1);
   $('#dot').classList.toggle('on', online);
   $('#dot').classList.toggle('busy', online && !!now);
-  $('#statusBtn').classList.toggle('busy', online && !!now);
+  $('#topStatus').classList.toggle('busy', online && !!now);
   $('#statusText').textContent = !online ? '连接中…'
     : now ? `${now.step || '想想怎么回'}…${busy.length > 1 ? ` · ${busy.length} 件事` : ''}`
     : active ? `后台 ${active} 个任务进行中` : '在线';
-  $('#statusBtn').title = now ? `${now.title}：${now.step || ''}` : '查看喵团动态';
-  $('#actBadge').textContent = busy.length ? `${busy.length} 件进行中` : '';
+  $('#topStatus').title = now ? `${now.title}：${now.step || ''}` : '';
 }
-
-// ---------- 喵团动态（仿 Muse Activity）：主 agent 每件事一条，正在做的显示步骤；上面是后台在跑的任务 ----------
-const ACT_KIND = { message: '💬', deliver: '📨', goal: '🎯' };
-
-function activityItem(a) {
-  const running = a.status === 'running';
-  const icon = running ? '<i class="spin"></i>' : a.status === 'failed' ? '⚠️' : ACT_KIND[a.kind] || '✓';
-  const toGoal = a.goalId && (a.kind === 'goal' || !a.taskId); // 目标相关的动态跳目标，其余有任务的跳任务
-  const goto = toGoal ? ` data-goto-goal="${esc(a.goalId)}"` : a.taskId ? ` data-goto-task="${esc(a.taskId)}"` : '';
-  const steps = a.steps?.length
-    ? `<details class="asteps"${running ? ' open' : ''}><summary>过程 · ${a.steps.length} 步${a.endedAt ? ` · 用时 ${fmtSecs(Math.max(0, Math.round((Date.parse(a.endedAt) - Date.parse(a.at)) / 1000)))}` : ''}</summary>`
-      + `<ol>${a.steps.map((s, i) => `<li class="${running && i === a.steps.length - 1 ? 'now' : ''}"><time>${clock(s.at)}</time>${esc(s.text)}</li>`).join('')}</ol></details>` : '';
-  return `<li class="aitem ${esc(a.status)}">
-    <span class="aicon">${icon}</span>
-    <div class="abody">
-      <div class="ahead"><b>${esc(a.title)}</b><time>${clock(a.at)}</time></div>
-      <small>${running ? `正在${esc(a.step || '想想怎么回')}…` : esc(a.outcome || '')}</small>
-      ${steps}${goto ? `<button type="button" class="alink"${goto}>${toGoal ? '看目标' : '看任务'} ›</button>` : ''}${a.traceId ? traceLink(`traces/${a.traceId}`) : ''}
-    </div>
-  </li>`;
-}
-
-function renderActivity() {
-  if ($('#activitySheet').hidden) return;
-  const tasks = S.tasks.filter((t) => t.status === 'running' || t.status === 'queued');
-  const running = tasks.length ? `<div class="agroup">后台在跑 · ${tasks.length}</div><ul class="arun">${tasks.map((t) => `<li><button type="button" data-goto-task="${esc(t.id)}">
-      <i class="spin"></i><b>${esc(t.title)}</b><small>${t.status === 'queued' ? '排队中' : esc(t.steps?.at(-1)?.label || '思考中')}</small></button></li>`).join('')}</ul>` : '';
-  let group = '';
-  const items = [...(S.activity || [])].reverse().map((a) => {
-    const g = chatGroup(a.at);
-    return `${g !== group ? `<div class="agroup">${(group = g)}</div>` : ''}${activityItem(a)}`;
-  }).join('');
-  $('#activityList').innerHTML = running + (items ? `<ul class="alist">${items}</ul>` : '<div class="empty">喵团还没做过事。跟它说句话试试～</div>');
-}
-
-function openActivity() {
-  togglePanel(false);
-  closeDrawer();
-  $('#activitySheet').hidden = false;
-  renderActivity();
-}
-
-$('#statusBtn').addEventListener('click', openActivity);
-$('#activitySheet').addEventListener('click', (e) => {
-  // 点「看任务 / 看目标」：关掉面板，交给下面全局的 data-goto-* 处理跳转
-  if (e.target === $('#activitySheet') || e.target.closest('[data-close-sheet]') || e.target.closest('[data-goto-task], [data-goto-goal]')) $('#activitySheet').hidden = true;
-});
 
 // 进行中的任务每秒刷新计时。
 setInterval(() => {
@@ -1114,7 +1066,6 @@ $('#topLeft').addEventListener('click', () => ($('#chatView').hidden ? showView(
 $('#drawer').addEventListener('click', async (e) => {
   if (!e.target.closest('.drawerbody')) return closeDrawer(); // 点右边的遮罩关掉
   if (e.target.closest('[data-chat-new]')) return startNewChat();
-  if (e.target.closest('[data-open-activity]')) return openActivity();
   const view = e.target.closest('[data-goto-view]')?.dataset.gotoView;
   if (view) { closeDrawer(); return showView(view); }
   const viewer = e.target.closest('[data-open-viewer]')?.dataset.openViewer;
@@ -1430,7 +1381,6 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !$('#siteBrowser').hidden) closeSite();
   if (e.key === 'Escape' && !$('#reportReader').hidden) $('#reportReader').hidden = true;
   if (e.key === 'Escape' && !$('#drawer').hidden) closeDrawer();
-  if (e.key === 'Escape') $('#activitySheet').hidden = true;
   if (e.key === 'Escape') { $('#idViewer').hidden = true; $('#resumeViewer').hidden = true; }
   const rc = (e.key === 'Enter' || e.key === ' ') && e.target.closest?.('[data-open-report]');
   if (rc) { e.preventDefault(); openReport(rc.dataset.openReport); }

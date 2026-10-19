@@ -68,11 +68,11 @@ const STEP_LABEL = {
 };
 
 // ---------- 每个人的状态（服务端持久化）：<数据目录>/users/<id>/state.json ----------
-// 聊天、消息、任务、目标、动态、位置、统计都按人分开存。任务、目标、动态上记着 uid，后台流程（任务队列、目标调度、
+// 聊天、消息、任务、目标、位置、统计都按人分开存。任务、目标上记着 uid，后台流程（任务队列、目标调度、
 // agent 推来的工具调用、沙箱的实时画面）凭它找回是谁的；上传的图、浏览回放也放在各自的目录下。
 const readJson = (file, fallback) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } };
 const newId = (p) => `${p}_${Date.now().toString(36)}${crypto.randomBytes(3).toString('hex')}`;
-const users = new Map(); // 用户 id → { id, name, role, status, dir, home, state, clients, saveTimer }
+const users = new Map(); // 用户 id → { id, name, role, status, dir, home, state, clients, activity, saveTimer }
 const U = (x) => users.get(x?.uid);
 const active = (u) => u?.status !== 'disabled';
 
@@ -82,11 +82,12 @@ function loadUser(row) {
   if (known) return Object.assign(known, { name: row.name, role: row.role, status: row.status });
   const dir = userDir(row.id);
   fs.mkdirSync(path.join(dir, 'uploads'), { recursive: true });
-  const state = { messages: [], tasks: [], goals: [], chats: [], activity: [], ...readJson(path.join(dir, 'state.json'), {}) };
+  const state = { messages: [], tasks: [], goals: [], chats: [], ...readJson(path.join(dir, 'state.json'), {}) };
   delete state.feed; // 「动态」已由目标取代
-  const u = { id: row.id, name: row.name, role: row.role, status: row.status, dir, home: homeOf(row), state, clients: new Set(), saveTimer: null };
+  delete state.activity; // 「喵团动态」已删掉，以前存下的记录不要了
+  const u = { id: row.id, name: row.name, role: row.role, status: row.status, dir, home: homeOf(row), state, clients: new Set(), activity: [], saveTimer: null };
   users.set(u.id, u);
-  for (const x of [...state.tasks, ...state.goals, ...state.activity]) x.uid = u.id; // 单用户版的老数据上没有 uid
+  for (const x of [...state.tasks, ...state.goals]) x.uid = u.id; // 单用户版的老数据上没有 uid
   for (const t of state.tasks) {
     // App 重启时 Hermes 那边可能还在跑这一轮（/v1/runs）：启动后按 run id 接回事件流，不重跑。
     if (t.status === 'running' && t.runId) { t.reattach = true; continue; }
@@ -99,7 +100,6 @@ function loadUser(row) {
     reports: state.messages.filter((m) => m.report).length,
     since: [...state.tasks.map((t) => t.createdAt), ...state.messages.map((m) => m.at)].filter(Boolean).sort()[0] || new Date().toISOString(),
   };
-  for (const a of state.activity) if (a.status === 'running') Object.assign(a, { status: 'failed', step: '', outcome: 'App 重启，这件事中断了' });
   // 加聊天功能之前的消息都归到一个聊天里
   if (!state.chats.length && state.messages.length) {
     const first = state.messages[0].at || new Date().toISOString();
@@ -143,7 +143,7 @@ function writeState(u) {
   fs.writeFileSync(`${file}.tmp`, JSON.stringify({
     // 每个聊天最多留最近 300 条
     messages: s.chats.flatMap((c) => s.messages.filter((m) => m.chatId === c.id).slice(-300)),
-    chats: s.chats, currentChat: s.currentChat, stats: s.stats, activity: s.activity.slice(-60),
+    chats: s.chats, currentChat: s.currentChat, stats: s.stats,
     tasks: s.tasks.slice(-80), goals: s.goals, location: s.location,
   }));
   fs.renameSync(`${file}.tmp`, file);
@@ -168,7 +168,7 @@ function broadcast(u, ev) {
 const watching = () => [...users.values()].some((u) => u.clients.size > 0); // 有没有人开着 App：决定沙箱推不推连续画面
 
 // ---------- 轨迹（Langfuse，调试用）：hermes-home/.env 里有 HERMES_LANGFUSE_* 才开（scripts/start-langfuse.sh 会写上） ----------
-// 调度者做的每件事（一条喵团动态：回消息、转述结果、推目标进展、建目标）是一条 trace：每次 LongCat 调用一个 generation，
+// 调度者做的每件事（回消息、转述结果、推目标进展、建目标）是一条 trace：每次 LongCat 调用一个 generation，
 // 每一步一个 event，调度结果（模型原始输出 → App 兜底改写后的决定）一个 event。后台任务每一轮在 App 这边也记一条：
 // 发给执行 agent 的完整任务说明、结局、出错原因（agent 没收到请求、连接断了这类 Hermes 那边看不到的问题）。
 // Langfuse 会话 = Hermes 会话：和任务有关的都记在 task-<任务 id>，Hermes 的 langfuse 插件把执行 agent 的每一轮（每次 LLM 调用、
@@ -178,8 +178,8 @@ const LF_URL = (hermesEnv.HERMES_LANGFUSE_BASE_URL || 'https://cloud.langfuse.co
 const LF_AUTH = hermesEnv.HERMES_LANGFUSE_PUBLIC_KEY && hermesEnv.HERMES_LANGFUSE_SECRET_KEY
   ? `Basic ${Buffer.from(`${hermesEnv.HERMES_LANGFUSE_PUBLIC_KEY}:${hermesEnv.HERMES_LANGFUSE_SECRET_KEY}`).toString('base64')}` : '';
 const ACT_LABEL = { message: '回消息', deliver: '转述结果', goal: '目标' };
-const traceCtx = new AsyncLocalStorage(); // 当前在做哪件事（哪条动态）：longcat() 据此把调用记到那条 trace 下
-const lfOpen = new Map(); // 还没做完的事：动态 id → { act, traceId, rootId, start, input, spans }
+const traceCtx = new AsyncLocalStorage(); // 当前在做哪件事：longcat() 据此把调用记到那条 trace 下
+const lfOpen = new Map(); // 还没做完的事：这件事的 id → { act, traceId, rootId, start, input, spans }
 const lfQueue = [];
 let lfTimer = null;
 let lfWarnedAt = 0;
@@ -233,8 +233,7 @@ async function lfFlush() {
 // 一件事开始：建 trace。子 span 先攒着，做完时一起发（派了任务、改了任务之后才知道该记到哪个会话）。
 function lfStart(a, input) {
   if (!LF_AUTH) return;
-  a.traceId = hex(16);
-  lfOpen.set(a.id, { act: a, traceId: a.traceId, rootId: hex(8), start: Date.now(), input, spans: [] });
+  lfOpen.set(a.id, { act: a, traceId: hex(16), rootId: hex(8), start: Date.now(), input, spans: [] });
 }
 
 function lfChild(a, span) {
@@ -297,38 +296,36 @@ function traceBase() {
   return lfProject && `${LF_URL.replace('//127.0.0.1', '//localhost')}/project/${lfProject}`;
 }
 
-// ---------- 喵团动态（仿 Muse Activity）：主 agent（调度者）每做一件事记一条 ----------
-// 回一条消息、转述一个任务结果、推一条目标新进展、建一个目标，都是一条动态：做到哪一步（step）、做完的结果（outcome）。
-// App 顶栏状态显示正在做的那一步，点开是「喵团动态」面板。后台任务自己的步骤还在任务里。
+// ---------- 喵团手上的事：主 agent（调度者）每做一件事记一条 ----------
+// 回一条消息、转述一个任务结果、推一条目标新进展、建一个目标，都是一件事：做到哪一步（step）、做完的结果（outcome，进轨迹）。
+// 只放在内存里，做完就丢。App 顶栏状态显示正在做的那一步；后台任务自己的步骤在任务里。
 
 // replyIn：做完会往哪个聊天发消息。App 在那个聊天里显示「…」（仿 Muse：执行过程聊天里只有省略号，步骤看顶栏）。
 // input：这件事的完整输入（用户原话、任务结果），只进轨迹，不存。
 function startActivity(u, { title, kind = 'message', chatId, replyIn, taskId, goalId, input }) {
-  const a = { id: newId('a'), uid: u.id, kind, title: String(title || '').replace(/\s+/g, ' ').slice(0, 40), chatId, replyIn, taskId, goalId, status: 'running', step: '', steps: [], at: new Date().toISOString() };
+  const a = { id: newId('a'), uid: u.id, kind, title: String(title || '').replace(/\s+/g, ' ').slice(0, 40), chatId, replyIn, taskId, goalId, status: 'running', step: '' };
   lfStart(a, input ?? title);
-  u.state.activity.push(a);
-  if (u.state.activity.length > 60) u.state.activity.splice(0, u.state.activity.length - 60);
+  u.activity.push(a);
   return a;
 }
 
 function pushActivity(a) {
-  const u = U(a);
-  save(u);
-  broadcast(u, { type: 'activity', activity: a });
+  broadcast(U(a), { type: 'activity', activity: a });
 }
 
 function activityStep(a, text) {
   if (a?.status !== 'running') return;
   a.step = String(text).slice(0, 40);
-  a.steps.push({ at: new Date().toISOString(), text: a.step });
   lfEvent(a, a.step);
   pushActivity(a);
 }
 
 function endActivity(a, outcome, status = 'done') {
   if (a?.status !== 'running') return;
-  Object.assign(a, { status, step: '', outcome: String(outcome || '').replace(/\s+/g, ' ').slice(0, 80), endedAt: new Date().toISOString() });
+  Object.assign(a, { status, step: '', outcome: String(outcome || '').replace(/\s+/g, ' ').slice(0, 80) });
   lfEnd(a);
+  const u = U(a);
+  u.activity = u.activity.filter((x) => x !== a);
   pushActivity(a);
 }
 
@@ -616,7 +613,7 @@ async function webSearchRows(q) {
 }
 const rowsText = (rows) => rows.map((r) => `[${r.n}] ${r.title} | ${r.url}\n${r.snippet}`).join('\n') || '（没有结果）';
 
-// 仿 Muse：聊天里不放搜索过程卡片和一键选项，搜的时候只有「…」，搜了什么在顶栏状态和「喵团动态」里看；搜完直接发回答。
+// 仿 Muse：聊天里不放搜索过程卡片和一键选项，搜的时候只有「…」，搜了什么在顶栏状态里看；搜完直接发回答。
 async function quickSearch(u, chatId, question, query, act) {
   const queries = [];
   let rows = [];
@@ -1738,7 +1735,7 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, {
         me: { name: u.name, role: u.role },
         messages: state.messages.filter((m) => m.chatId === state.currentChat).slice(-200), chats: chatList(u), currentChat: state.currentChat,
-        tasks: state.tasks.slice(-50), goals: state.goals, activity: state.activity.slice(-40), location: state.location || null, sites: listSites(u), sitesOrigin: SITES_ORIGIN,
+        tasks: state.tasks.slice(-50), goals: state.goals, activity: u.activity, location: state.location || null, sites: listSites(u), sitesOrigin: SITES_ORIGIN,
         traceBase: u.role === 'admin' ? traceBase() : null, // 轨迹里是所有人的完整对话，只给管理员
       });
     }
@@ -1765,7 +1762,7 @@ const server = http.createServer(async (req, res) => {
       accounts.bumpUsage(u.id, 'messages');
       const chatId = state.currentChat; // 调度者回复期间切了聊天，回复和任务也留在发消息的那个聊天
       addMessage(u, { role: 'me', text: text.trim(), images: files, chatId });
-      // 主 agent 的这一轮：每一步记进「喵团动态」，App 顶栏实时显示做到哪一步
+      // 主 agent 的这一轮：每一步推给 App，顶栏实时显示做到哪一步
       const act = startActivity(u, { title: text.trim() || `看你发的 ${files.length} 张图`, chatId, replyIn: chatId,
         input: `${text.trim()}${files.length ? `（附带 ${files.length} 张图片）` : ''}` });
       activityStep(act, '想想怎么回');
@@ -1779,7 +1776,7 @@ const server = http.createServer(async (req, res) => {
       if (taskOver) { d.task = null; d.reply = taskOver; }
       const goalOver = d.goal && goalLimit(u);
       if (goalOver) { d.goal = null; d.reply = goalOver; }
-      const did = []; // 这一轮做了什么，写进动态的结果
+      const did = []; // 这一轮做了什么，作为这件事的结果进轨迹
       if (d.ledgerDelete.length) {
         activityStep(act, `删账 ${d.ledgerDelete.length} 笔`);
         writeLedger(u, readLedger(u).filter((e) => !d.ledgerDelete.includes(e.id)));

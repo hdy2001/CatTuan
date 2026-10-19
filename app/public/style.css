@@ -166,6 +166,7 @@ textarea:focus { border-color: var(--accent); }
 /* ---- 任务卡片 ---- */
 .card.task { white-space: normal; display: flex; flex-direction: column; gap: 8px; }
 .card.task.running { border-color: var(--accent); }
+.alink { align-self: flex-start; padding: 2px 0; color: var(--accent-strong); font-size: 12px; text-decoration: none; } /* 卡片底下的「轨迹 ›」 */
 .task header { display: flex; align-items: center; gap: 8px; }
 .task header strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .task .kind { font-size: 11px; color: var(--muted); }
@@ -570,7 +571,7 @@ button.topbtn:hover { background: var(--chip); }
 .top.sub .topbtn .i-back { display: block; }
 .toptitle { flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; line-height: 1.3; }
 .toptitle b { max-width: 100%; font-size: 16px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.toptitle .status { justify-content: center; font-size: 11px; max-width: 100%; }
+.toptitle .status { justify-content: center; font-size: 11px; max-width: 100%; padding: 1px 8px; border-radius: 99px; }
 
 /* ---- 侧边栏：从左边滑出，桌面上贴着 App 那一栏的左边 ---- */
 .drawer { position: fixed; inset: 0; z-index: 10; display: flex; justify-content: center; background: var(--scrim, rgba(10, 20, 15, .38)); animation: drawerFade .2s ease-out; }
@@ -819,39 +820,9 @@ body.mock-clean .mockbar, body.mock-clean .pixelcat { display: none; }
 body:not(.mock-clean):has(.mockbar) #messages { padding-bottom: 150px; }
 .card.task .bk-stages { display: none; } /* 任务卡片上已经有步骤条 */
 
-/* ---- 顶栏状态：喵团（主 agent）正在做的那一步；点开「喵团动态」 ---- */
-button.status { border: 0; background: transparent; padding: 1px 8px; border-radius: 99px; cursor: pointer; font: inherit; font-size: 11px; color: var(--muted); }
-button.status:hover { background: var(--chip); }
-button.status.busy { color: var(--accent-strong); background: var(--accent-soft); }
+/* ---- 顶栏状态：喵团（主 agent）正在做的那一步 ---- */
+.status.busy { color: var(--accent-strong); background: var(--accent-soft); }
 #dot.busy { width: 8px; height: 8px; flex: none; background: none; border: 2px solid var(--accent); border-top-color: transparent; animation: spin .8s linear infinite; }
-
-/* ---- 喵团动态（仿 Muse Activity） ---- */
-.actsub { font-size: 12px; color: var(--muted); margin: -4px 0 6px; }
-.activity { padding-bottom: 8px; }
-.agroup { padding: 12px 2px 6px; font-size: 12px; font-weight: 600; color: var(--muted); }
-.arun, .alist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
-.arun button { width: 100%; display: flex; align-items: center; gap: 8px; padding: 9px 12px; border: 1px solid var(--accent); border-radius: 12px;
-  background: var(--accent-soft); color: var(--ink); cursor: pointer; text-align: left; font-size: 13px; }
-.arun b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
-.arun small { flex: none; color: var(--accent-strong); font-size: 12px; }
-.aitem { display: flex; gap: 10px; padding: 8px 2px; }
-.aicon { flex: none; width: 32px; height: 32px; border-radius: 10px; background: var(--chip); display: grid; place-items: center; font-size: 15px; }
-.aitem.running .aicon { background: var(--accent-soft); }
-.abody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.ahead { display: flex; align-items: baseline; gap: 8px; }
-.ahead b { flex: 1; min-width: 0; font-size: 14px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ahead time { flex: none; font-size: 11px; color: var(--muted); }
-.abody > small { font-size: 12px; color: var(--muted); line-height: 1.45; word-break: break-word; }
-.aitem.running .abody > small { color: var(--accent-strong); }
-.aitem.failed .abody > small { color: var(--danger); }
-.asteps { font-size: 12px; color: var(--muted); }
-.asteps summary { cursor: pointer; padding: 2px 0; }
-.asteps ol { list-style: none; margin: 2px 0 0; padding: 0 0 0 10px; border-left: 2px solid var(--line); display: flex; flex-direction: column; gap: 3px; }
-.asteps li { display: flex; gap: 8px; }
-.asteps li.now { color: var(--accent-strong); font-weight: 600; }
-.asteps time { flex: none; opacity: .7; font-variant-numeric: tabular-nums; }
-.alink { align-self: flex-start; border: 0; background: none; padding: 2px 0; color: var(--accent-strong); font-size: 12px; cursor: pointer; }
-a.alink { text-decoration: none; }
 
 /* ---- 目标（仿 Muse）：勾选框 = 完成，点开看说明和动态时间线 ---- */
 .gsection { font-size: 12px; font-weight: 600; color: var(--muted); padding: 4px 2px 0; }

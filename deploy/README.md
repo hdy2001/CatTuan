@@ -18,7 +18,7 @@ App ──按账号路由──► 执行 agent：每人一个 Hermes gateway（
 app/data/
   app.db                  账号、登录会话、邀请、每日用量（Node 自带的 node:sqlite）
   users/<uid>/
-    state.json            聊天、任务、目标、动态、位置
+    state.json            聊天、任务、目标、位置
     uploads/  frames/     上传的图、浏览回放
     hermes-home/          这个人的 agent 主目录：记忆、账本、关注、网站、会话库
                           （插件、SOUL.md 软链到仓库的 hermes-home；喵团技能和 config.yaml 各自一份）

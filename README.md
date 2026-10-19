@@ -75,7 +75,7 @@ scripts/start.sh                     # sandbox :8660 + 每个账号一个 agent�
 小范围给同事用，部署到服务器见 [deploy/README.md](deploy/README.md)。
 
 - **账号**：只能邀请，不开放注册。管理员 `node scripts/user.mjs invite 小王` 发一个 7 天有效、只能用一次的链接，同事打开后自己设密码。再发一次等于重置密码；`disable` 立刻下线、停掉他的 agent，数据保留。密码用 scrypt 加盐，登录会话的 token 在库里只存哈希。
-- **隔离**：每个人的聊天、任务、目标、动态、位置、上传的图、回放分开存，实时推送（SSE）只推给本人，拿别人的 id 调接口一律 404。
+- **隔离**：每个人的聊天、任务、目标、位置、上传的图、回放分开存，实时推送（SSE）只推给本人，拿别人的 id 调接口一律 404。
 - **执行 agent 每人一个**：Hermes 一个主目录里没有「用户」这个概念，记忆每轮都注入 system prompt，`session_search` 搜整个会话库，所以每人一个 HERMES_HOME 和 gateway，记忆、账本、关注、网站、会话自然分开。插件靠 `get_hermes_home()` 找数据，一行不用改。
 - **沙箱浏览器大家共用**：平台账号由管理员登录，成员看得到登录状态、没有登录按钮。实时画面按任务编号（插件从 Hermes 的会话 id 取）只推给任务的主人；猜不准是谁的就不显示。
 - **角色**：管理员（`--admin`）能开平台登录窗口、看 Langfuse 轨迹链接，不受额度限制。成员每天有消息、后台任务、目标检查的额度，最多同时盯 5 个目标、最短 60 分钟查一次；后台任务全局最多 4 个、每人最多 2 个同时跑，按先来后到轮流。都可以在环境变量里调，见 `deploy/cattuan.env.example`。
@@ -119,7 +119,7 @@ scripts/restart.sh all
   3. `Hermes turn`：Hermes 插件记的执行 agent 那一轮，每次 LLM 调用（含 token、缓存）和每个工具调用（参数和结果，默认脱敏、截断）。
   4. `调度者 · 转述结果`：任务结果 → 「转述」→ 发出去的消息。
   和任务无关的聊天（随口一问的普通搜索、记账）记在 `chat-<聊天 id>`；目标页上建目标记在 `goal-<目标 id>`，目标每次检查是一个任务，记在它自己的 `task-<id>`。
-- App 里：任务卡片下面的「轨迹 ›」打开这个任务的 Langfuse 会话；「喵团动态」里每条的「轨迹 ›」打开那条 trace。开轨迹之前的老任务没有。
+- App 里：任务卡片下面的「轨迹 ›」打开这个任务的 Langfuse 会话。开轨迹之前的老任务没有。
 - 调度者用 OTLP/HTTP 直接把 span 发给 Langfuse（`app/server.mjs` 的「轨迹」一节，仍然零依赖）；Langfuse 没开或发送失败只丢轨迹，不影响聊天和任务。执行 agent 那边的配置见插件的 `HERMES_LANGFUSE_*`（比如 `HERMES_LANGFUSE_CAPTURE=metadata` 只记结构不记内容）。
 - 注意：装了带 Python 依赖的插件以后，Hermes 改用它自己管理的环境（`hermes-home/installs/`）跑 agent。这个环境默认不带 extras，API server 要的 aiohttp 等会缺，agent 起不来（`gateway.out` 里是 `API Server: aiohttp not installed`）。`start-langfuse.sh` 会按原来 venv 装的 extras 补齐；自己装插件的话，要接着跑 `hermes pm install venv --extra messaging --extra …`。
 - 停掉：`docker-compose -p cattuan-langfuse -f langfuse/docker-compose.yml down`（数据在 docker volume 里，加 `-v` 才会删）；不想再记轨迹就删掉 `hermes-home/.env` 里的 `HERMES_LANGFUSE_*` 再重启。
@@ -127,7 +127,6 @@ scripts/restart.sh all
 ## 交互
 
 - **聊天**：调度者（主 agent）在想、在搜、在转述时，顶栏标题下面的状态实时显示它正在做的那一步（「想想怎么回…」「上网搜「…」…」「组织回答…」「转述「…」的结果」），同时几件事会带件数；没事时显示后台任务数或「在线」。喵团在想上一条时也能接着发，每条各自回。派了后台任务时，聊天页右下角的小电视直播它在干什么；任务完成后，结果作为新消息发回，并标注「来自后台任务」。
-- **喵团动态**（仿 Muse Activity）：点顶栏状态（或侧边栏「喵团动态」）打开。主 agent 每件事一条：回消息、上网搜、派任务、转述结果、推目标进展、建目标，带一句结果、完整过程（每一步的时间）和用时，能跳到对应的任务或目标；上面列出后台在跑的任务。存在 `app/data/state.json`，留最近 60 条。
 - **输入区**（仿微信）：输入框右边是「+」，有内容时变成「发送」。点「+」弹出工具面板：相册、拍摄、记账、新目标、社媒账号。
 - **社媒账号**：「+」→ 社媒账号，是一份社媒账号备忘录，平台上的公开账号（品牌、机构、博主、个人公开主页）都可以关注和读。每个平台（微博 / X / Instagram / Weverse / B 站 / 小红书）显示当前登录态、在该平台上已关注的账号，并提供登录按钮（点了会在电脑上弹出沙箱浏览器窗口，由你自己登录）。聊天里出现「登录 X」时挂的 🔑 按钮也会打开这个面板。小红书需要登录才能读，每条笔记只取封面图；登录后还能按关键词搜小红书笔记（`xiaohongshu_search`），比如问「附近有什么好吃的」，会用你共享的位置拼成「望京 美食」去搜。没关注的账号也能直接读（`official_photos` 的 `accounts` 参数）。
 - **位置**：「+」→ 位置，用浏览器定位（需要在 http://localhost:3210 或 https 页面上打开），服务端用 OpenStreetMap + BigDataCloud 反查成「城市 区 街道」。精确坐标只存在 `app/data/state.json`；给调度者和执行 agent 的只有地名和约 1 公里精度的坐标，超过 24 小时就不再给。可以开「打开 App 时自动更新」（只有浏览器已授权、且上次定位超过 30 分钟才静默更新，不会弹窗）。用户问「附近」「这边」时，调度者和后台任务会按这个位置处理。
