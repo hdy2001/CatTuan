@@ -20,7 +20,8 @@
       </button>
       <div class="toptitle">
         <b id="topTitle">喵团</b>
-        <div class="status"><i id="dot"></i><span id="statusText">连接中…</span></div>
+        <!-- 状态：喵团（主 agent）正在做的那一步，比如「上网搜「…」」；没事做时显示在线 / 后台任务数。点开是「喵团动态」 -->
+        <button type="button" id="statusBtn" class="status" aria-label="查看喵团动态"><i id="dot"></i><span id="statusText">连接中…</span></button>
       </div>
       <span class="topbtn" aria-hidden="true"></span>
     </header>
@@ -30,6 +31,12 @@
       <!-- 小电视悬浮窗：后台任务在跑时直播它在干什么，可以收起（见 app.js renderTV） -->
       <div id="tv" class="tv" hidden></div>
       <form id="composer" class="composer">
+        <!-- 演示入口：电话预约（Longcat 第一期 PRD）的交互演示（?mock=booking，假数据，不连服务端）；演示里变成「返回喵团」 -->
+        <a id="demoBanner" class="demobanner" href="?mock=booking">
+          <span class="dbicon" aria-hidden="true">📞</span>
+          <span class="dbtext"><b>电话预约演示</b><small>PRD 交互演示 · 假数据，不打电话、不写数据</small></span>
+          <em>进入 ›</em>
+        </a>
         <div id="attachments" class="attachments"></div>
         <div class="row">
           <textarea id="input" rows="1" placeholder="想让我帮你做点什么？"></textarea>
@@ -140,8 +147,20 @@
         <strong>社媒账号</strong>
         <button type="button" class="sheetclose" data-close-sheet aria-label="关闭">×</button>
       </header>
-      <div class="accsub">这些平台上的公开账号都可以读：品牌、机构、博主、朋友的公开主页都行，只看不发、不点赞、不评论。登录在电脑上弹出的独立窗口里完成，喵团看不到密码；建议用小号。</div>
+      <div id="accSub" class="accsub">这些平台上的公开账号都可以读：品牌、机构、博主、朋友的公开主页都行，只看不发、不点赞、不评论。登录在电脑上弹出的独立窗口里完成，喵团看不到密码；建议用小号。</div>
       <section id="accounts" class="accounts" aria-label="社媒账号登录态"></section>
+    </div>
+  </div>
+
+  <!-- 喵团动态（仿 Muse Activity）：主 agent 每件事一条，正在做的显示当前步骤；上面列出后台在跑的任务 -->
+  <div id="activitySheet" class="sheet" hidden>
+    <div class="sheetbody" role="dialog" aria-label="喵团动态">
+      <header class="sheethead">
+        <strong>喵团动态</strong>
+        <button type="button" class="sheetclose" data-close-sheet aria-label="关闭">×</button>
+      </header>
+      <div class="actsub">喵团自己做的每件事：回消息、上网搜、派任务、转述结果、推目标进展。后台任务的详细步骤在「后台任务」里。</div>
+      <div id="activityList" class="activity"></div>
     </div>
   </div>
 
@@ -163,6 +182,9 @@
         <button type="button" class="drow" data-goto-view="tasks">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7l1.5 1.5L8 6M4 13l1.5 1.5L8 12M11 7h9M11 13h9M11 19h9" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>后台任务<b id="taskBadge" class="dbadge" hidden></b>
         </button>
+        <button type="button" class="drow" data-open-activity>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2.5-6 5 12 2.5-6h4" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>喵团动态<span id="actBadge" class="dmeta"></span>
+        </button>
         <div class="dsep"></div>
         <div class="dgroup">喵团档案</div>
         <button type="button" class="drow" data-open-viewer="id">
@@ -178,6 +200,8 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
         <div id="chatsList" class="dchats" hidden></div>
+        <!-- 当前账号：每个人的聊天、任务、目标、账本都是自己的 -->
+        <div class="dme"><span>已登录</span><b id="meName"></b><em id="meRole" hidden>管理员</em><button type="button" data-logout>退出</button></div>
       </aside>
     </div>
   </div>

@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
-# 启动 CatTuan 专用的 Hermes gateway（OpenAI 兼容 API server，默认 127.0.0.1:8650）。
+# 启动一个 CatTuan 专用的 Hermes gateway（OpenAI 兼容 API server）。
+#   scripts/start-agent.sh                 仓库的 hermes-home（沿用单用户版数据的管理员，默认 127.0.0.1:8650）
+#   scripts/start-agent.sh <HERMES_HOME>   某个账号的主目录（scripts/agents.mjs 给每个账号这样起一个，端口和 key 在它的 .env 里）
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-export HERMES_HOME="$ROOT/hermes-home"
+export HERMES_HOME="${1:-$ROOT/hermes-home}"
 
-# 模型 key：优先用本项目 hermes-home/.env，缺的再从 ~/.hermes/.env 补。
-for envfile in "$HERMES_HOME/.env" "$HOME/.hermes/.env"; do
+# 模型 key：优先用这个主目录的 .env，再用仓库 hermes-home/.env（大家共用的那一份），缺的再从 ~/.hermes/.env 补。
+for envfile in "$HERMES_HOME/.env" "$ROOT/hermes-home/.env" "$HOME/.hermes/.env"; do
   [ -f "$envfile" ] || continue
   # macOS 自带 bash 3.2 不能 source 进程替换，逐行 export。
   while IFS='=' read -r k v; do
@@ -14,7 +16,7 @@ for envfile in "$HERMES_HOME/.env" "$HOME/.hermes/.env"; do
     [ -z "${!k:-}" ] && export "$k=$v"
   done < <(grep -E '^(LONGCAT_API_KEY|OPENROUTER_API_KEY|FAL_KEY)=' "$envfile")
 done
-: "${LONGCAT_API_KEY:?需要 LONGCAT_API_KEY（放在 ~/.hermes/.env 或当前环境里）}"
+: "${LONGCAT_API_KEY:?需要 LONGCAT_API_KEY（放在 hermes-home/.env、~/.hermes/.env 或当前环境里）}"
 
 # 首次运行补上本地 API server 配置（本地开发用的随机 key）。
 # .env 可能是从 .env.example 复制来的、只填了 LONGCAT_API_KEY，所以按缺不缺 API_SERVER_KEY 判断，而不是看文件在不在。

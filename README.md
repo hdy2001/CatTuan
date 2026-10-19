@@ -20,9 +20,13 @@
 ```
 
 ```
-app/            调度者 + 任务队列 + 目标调度 + Web App（聊天 / 目标 / 任务三个 Tab）+ 图片代理；状态存 app/data/state.json
+app/            调度者 + 任务队列 + 目标调度 + Web App（聊天 / 目标 / 任务三个 Tab）+ 图片代理 + 登录页
+  accounts.mjs            账号（只能邀请）：用户、登录会话、邀请链接、每日用量，存 app/data/app.db（node:sqlite）
+  homes.mjs               每个账号一个 HERMES_HOME：从下面的 hermes-home 模板生成（插件、SOUL.md 软链，技能和 config.yaml 各一份）
+  data/users/<id>/        每个人的聊天、任务、目标（state.json）、上传的图、回放，和他的 agent 主目录 hermes-home/
 sandbox/        沙箱浏览器服务：只读访问社媒公开账号（微博 / X / Instagram / Weverse / B 站 / 小红书）、网页搜索和读网页，登录窗口；profile 在 sandbox/profile
-hermes-home/    执行 agent 的 HERMES_HOME（与 ~/.hermes 隔离）
+deploy/         上线部署：装机脚本、systemd 服务、Caddy（HTTPS）、每日备份，见 deploy/README.md
+hermes-home/    执行 agent 的模板 HERMES_HOME（与 ~/.hermes 隔离）：每个账号的 agent 主目录从这里生成；从单用户版升级的管理员直接用它
   SOUL.md                 执行 agent 人设（通用私人助理）和各类工具的用法
   plugins/official-accounts/   official_account（找/关注社媒账号）、official_photos（读账号最近的帖子）、xiaohongshu_search
   plugins/idol-photos/         idol_photo_search（按关键词搜公开图片，工具名沿用旧版）
@@ -35,7 +39,10 @@ hermes-home/    执行 agent 的 HERMES_HOME（与 ~/.hermes 隔离）
   official_accounts.json       已关注的社媒账号
   memories/USER.md             记住的用户画像和偏好
 hermes-agent/   上游 NousResearch/hermes-agent（MIT），未改动
-scripts/        start.sh 一键启动三个服务；restart.sh 等没有进行中的任务再重启（重启前没跑完的任务也会自动续跑）（start-sandbox.sh / start-agent.sh / start-app.sh 可单独启动）
+langfuse/       调试用的轨迹分析：本机自托管 Langfuse 的 docker-compose.yml（见下面「调试：轨迹分析」）
+scripts/        start.sh 一键启动；restart.sh 等没有进行中的任务再重启（重启前没跑完的任务也会自动续跑）（start-sandbox.sh / start-app.sh 可单独启动）；start-langfuse.sh 启动 Langfuse
+  user.mjs                账号管理：invite 发邀请链接 / list / disable / enable / adopt（从单用户版升级）
+  agents.mjs              agent 守护进程：给每个账号跑一个 Hermes gateway（start-agent.sh <主目录>），挂了自动拉起，停用的账号停掉
 ```
 
 ## 启动
@@ -47,20 +54,36 @@ git clone --recurse-submodules <仓库地址> CatTuan && cd CatTuan   # hermes-a
 python3 -m venv hermes-agent/.venv && hermes-agent/.venv/bin/pip install -e hermes-agent   # 装 Hermes
 cd sandbox && npm install && cd ..                                # 装 playwright-core（复用本机 Playwright 缓存的 Chromium）
 cp hermes-home/.env.example hermes-home/.env                      # 填上自己的 LONGCAT_API_KEY
+node scripts/user.mjs invite <你的名字> --admin                    # 建管理员账号，打开打印的链接设密码
 ```
+
+从单用户版升级（原来的聊天、账本、记忆都留着）：先停掉 App 和 agent，再跑一次 `node scripts/user.mjs adopt <你的名字>`。它把 `app/data/state.json`、上传的图、回放归到这个账号下，agent 沿用仓库的 `hermes-home`，最后打印设密码的链接。
 
 以后每次：
 
 ```bash
-scripts/start.sh                     # sandbox :8660 + agent :8650 + app http://localhost:3210
+scripts/start.sh                     # sandbox :8660 + 每个账号一个 agent（沿用老数据的 :8650，新账号 :8701 起）+ app http://localhost:3210
 ```
 
-- `LONGCAT_API_KEY`：优先读 `hermes-home/.env`，其次读 `~/.hermes/.env`。agent 自己的 API server 配置（`API_SERVER_*`，带随机 key）第一次启动时自动写进 `hermes-home/.env`。
-- 仓库里只有代码和配置。运行时数据都在本机、不进仓库（见 `.gitignore`）：聊天记录 `app/data/`、沙箱浏览器的登录态 `sandbox/profile/`，以及 `hermes-home/` 下的会话数据库、记忆、账本、关注列表、日志、生成的网站、自动装的技能。所以每个人的喵团各用各的数据和登录。
+- `LONGCAT_API_KEY`：优先读 `hermes-home/.env`，其次读 `~/.hermes/.env`，所有账号的 agent 共用。每个账号 agent 自己的端口和 key（`API_SERVER_*`）在它主目录的 `.env` 里，建账号时生成。
+- 仓库里只有代码和配置。运行时数据都在本机、不进仓库（见 `.gitignore`）：账号库和每个人的数据 `app/data/`（聊天记录、agent 的会话数据库、记忆、账本、关注列表、生成的网站、自动装的技能），以及沙箱浏览器的登录态 `sandbox/profile/`。
 - 图片代理沿用 `~/.hermes/.env` 里的 `HTTP(S)_PROXY`，取 twimg、cdninstagram 等国内直连不了的图床；各平台图床（sinaimg、hdslb、twimg、cdninstagram / fbcdn、wevpstatic）会自动补 Referer。
 - 沙箱浏览器同样沿用这个代理访问 X / Instagram / Weverse（也可以单独设 `SANDBOX_PROXY`），微博、B 站始终直连。
 
+## 多人使用（账号）
+
+小范围给同事用，部署到服务器见 [deploy/README.md](deploy/README.md)。
+
+- **账号**：只能邀请，不开放注册。管理员 `node scripts/user.mjs invite 小王` 发一个 7 天有效、只能用一次的链接，同事打开后自己设密码。再发一次等于重置密码；`disable` 立刻下线、停掉他的 agent，数据保留。密码用 scrypt 加盐，登录会话的 token 在库里只存哈希。
+- **隔离**：每个人的聊天、任务、目标、动态、位置、上传的图、回放分开存，实时推送（SSE）只推给本人，拿别人的 id 调接口一律 404。
+- **执行 agent 每人一个**：Hermes 一个主目录里没有「用户」这个概念，记忆每轮都注入 system prompt，`session_search` 搜整个会话库，所以每人一个 HERMES_HOME 和 gateway，记忆、账本、关注、网站、会话自然分开。插件靠 `get_hermes_home()` 找数据，一行不用改。
+- **沙箱浏览器大家共用**：平台账号由管理员登录，成员看得到登录状态、没有登录按钮。实时画面按任务编号（插件从 Hermes 的会话 id 取）只推给任务的主人；猜不准是谁的就不显示。
+- **角色**：管理员（`--admin`）能开平台登录窗口、看 Langfuse 轨迹链接，不受额度限制。成员每天有消息、后台任务、目标检查的额度，最多同时盯 5 个目标、最短 60 分钟查一次；后台任务全局最多 4 个、每人最多 2 个同时跑，按先来后到轮流。都可以在环境变量里调，见 `deploy/cattuan.env.example`。
+- **上线配置**：`PUBLIC_ORIGIN`（App 的 https 地址：来源校验、cookie 的 Secure / `__Host-` 前缀、网站的 CSP 都按它来）和 `SITES_ORIGIN`（网站的地址，单独的子域名）。本机开发都不用设。
+
 ## 平台登录（沙箱）
+
+多人版里只有管理员能开登录窗口；服务器上没有屏幕，登录窗口开在虚拟显示上、经 noVNC 操作（见 deploy/README.md「平台登录」）。
 
 X、Instagram、Weverse 不登录看不到帖子，B 站免登录也能读、只是偶尔会被风控（-352 / 412）。登录全程由你自己完成：
 
@@ -78,14 +101,38 @@ X、Instagram、Weverse 不登录看不到帖子，B 站免登录也能读、只
 - 退出登录：点「重新登录」在窗口里退出，或者停掉沙箱后删除 `sandbox/profile`（会清掉所有平台的登录和微博访客 cookie）。
 - 沙箱接口：`GET /sessions` 看各平台登录状态；`GET /login?platform=x|instagram|weverse|bilibili` 打开登录窗口；`GET /login/done` 结束登录；`GET /<platform>/search_users?q=`、`GET /<platform>/timeline?uid=&days=` 返回 `{post_id, ts, at, author, text, url, images: [{large, thumb}]}`。没登录时返回 401 `{error: "login_required", message}`。
 
+## 调试：轨迹分析（Langfuse）
+
+调度者和执行 agent 每一步做了什么，都能在本机自托管的 [Langfuse](https://langfuse.com)（MIT）里按任务看。可选，不开不影响使用。
+
+```bash
+brew install colima docker docker-compose   # 没有 docker 的话；Colima 是开源的命令行 docker 运行时
+scripts/start-langfuse.sh                   # 第一次要拉镜像，几分钟
+scripts/restart.sh all
+```
+
+- `start-langfuse.sh` 第一次运行会：随机生成 `langfuse/.env`（数据库密码、项目 key、登录账号，不进仓库），用 `langfuse/docker-compose.yml` 起 Langfuse（端口只绑 127.0.0.1，关了匿名遥测），把项目 key 写进 `hermes-home/.env`（`HERMES_LANGFUSE_*`），并给执行 agent 装上 Hermes 官方的 `langfuse` 插件。以后再运行只是确保容器在跑。
+- 打开 http://localhost:3000 ，账号 `dev@cattuan.local`，密码在 `langfuse/.env` 的 `LANGFUSE_USER_PASSWORD`。
+- **按任务串起来**：Langfuse 的会话 ID 和 Hermes 的会话 ID 一样，都是 `task-<任务 id>`。一个任务的会话里按时间排着：
+  1. `调度者 · 回消息`：用户原话 → 「调度决策」（发给 LongCat 的完整 system prompt 和上下文、原始 JSON 输出、token）→ 「调度结果」（模型给的决定和 App 校验、兜底改写后真正执行的决定，两边不一样就是要查的地方）→ 每一步。
+  2. `后台任务 · App 侧`：发给执行 agent 的完整任务说明、这一轮的结局（完成 / 失败原因 / 停止 / 插话没赶上 / agent 重启丢了）。修改轮每轮一条。
+  3. `Hermes turn`：Hermes 插件记的执行 agent 那一轮，每次 LLM 调用（含 token、缓存）和每个工具调用（参数和结果，默认脱敏、截断）。
+  4. `调度者 · 转述结果`：任务结果 → 「转述」→ 发出去的消息。
+  和任务无关的聊天（随口一问的普通搜索、记账）记在 `chat-<聊天 id>`；目标页上建目标记在 `goal-<目标 id>`，目标每次检查是一个任务，记在它自己的 `task-<id>`。
+- App 里：任务卡片下面的「轨迹 ›」打开这个任务的 Langfuse 会话；「喵团动态」里每条的「轨迹 ›」打开那条 trace。开轨迹之前的老任务没有。
+- 调度者用 OTLP/HTTP 直接把 span 发给 Langfuse（`app/server.mjs` 的「轨迹」一节，仍然零依赖）；Langfuse 没开或发送失败只丢轨迹，不影响聊天和任务。执行 agent 那边的配置见插件的 `HERMES_LANGFUSE_*`（比如 `HERMES_LANGFUSE_CAPTURE=metadata` 只记结构不记内容）。
+- 注意：装了带 Python 依赖的插件以后，Hermes 改用它自己管理的环境（`hermes-home/installs/`）跑 agent。这个环境默认不带 extras，API server 要的 aiohttp 等会缺，agent 起不来（`gateway.out` 里是 `API Server: aiohttp not installed`）。`start-langfuse.sh` 会按原来 venv 装的 extras 补齐；自己装插件的话，要接着跑 `hermes pm install venv --extra messaging --extra …`。
+- 停掉：`docker-compose -p cattuan-langfuse -f langfuse/docker-compose.yml down`（数据在 docker volume 里，加 `-v` 才会删）；不想再记轨迹就删掉 `hermes-home/.env` 里的 `HERMES_LANGFUSE_*` 再重启。
+
 ## 交互
 
-- **聊天**：调度者回复后，如果派了后台任务，回复下面会挂一个实时状态条（当前步骤 + 计时），点击跳到「任务」。任务完成后，结果作为新消息发回，并标注「来自后台任务」。
+- **聊天**：调度者（主 agent）在想、在搜、在转述时，顶栏标题下面的状态实时显示它正在做的那一步（「想想怎么回…」「上网搜「…」…」「组织回答…」「转述「…」的结果」），同时几件事会带件数；没事时显示后台任务数或「在线」。喵团在想上一条时也能接着发，每条各自回。派了后台任务时，聊天页右下角的小电视直播它在干什么；任务完成后，结果作为新消息发回，并标注「来自后台任务」。
+- **喵团动态**（仿 Muse Activity）：点顶栏状态（或侧边栏「喵团动态」）打开。主 agent 每件事一条：回消息、上网搜、派任务、转述结果、推目标进展、建目标，带一句结果、完整过程（每一步的时间）和用时，能跳到对应的任务或目标；上面列出后台在跑的任务。存在 `app/data/state.json`，留最近 60 条。
 - **输入区**（仿微信）：输入框右边是「+」，有内容时变成「发送」。点「+」弹出工具面板：相册、拍摄、记账、新目标、社媒账号。
 - **社媒账号**：「+」→ 社媒账号，是一份社媒账号备忘录，平台上的公开账号（品牌、机构、博主、个人公开主页）都可以关注和读。每个平台（微博 / X / Instagram / Weverse / B 站 / 小红书）显示当前登录态、在该平台上已关注的账号，并提供登录按钮（点了会在电脑上弹出沙箱浏览器窗口，由你自己登录）。聊天里出现「登录 X」时挂的 🔑 按钮也会打开这个面板。小红书需要登录才能读，每条笔记只取封面图；登录后还能按关键词搜小红书笔记（`xiaohongshu_search`），比如问「附近有什么好吃的」，会用你共享的位置拼成「望京 美食」去搜。没关注的账号也能直接读（`official_photos` 的 `accounts` 参数）。
 - **位置**：「+」→ 位置，用浏览器定位（需要在 http://localhost:3210 或 https 页面上打开），服务端用 OpenStreetMap + BigDataCloud 反查成「城市 区 街道」。精确坐标只存在 `app/data/state.json`；给调度者和执行 agent 的只有地名和约 1 公里精度的坐标，超过 24 小时就不再给。可以开「打开 App 时自动更新」（只有浏览器已授权、且上次定位超过 30 分钟才静默更新，不会弹窗）。用户问「附近」「这边」时，调度者和后台任务会按这个位置处理。
 - **技能**（用户不用设置）：执行 agent 需要什么技能就自己装。遇到现有工具和技能做不好的事，它会用 `skill_store` 在本地 57 个备用内置技能和在线技能库（skills.sh 等）里找，然后安装。在线技能装之前会过 Hermes 的安全扫描，扫描不过的装不上；装的原因记在 `hermes-home/skills/.cattuan_installs.json`。很多技能要读网页，所以执行 agent 有只读的 `fetch_url`（只能 GET 公开网址，内网和本机地址会被拦截，限大小）。「+」→ 技能是只读面板，分「按需装的（什么时候、为什么装）/ AI 自己写的 / 喵团自带」三组，可以展开看内容。
-- **目标**：持续目标，定时让执行 agent 检查（每 N 分钟或每天几点）。每个目标下面一行小字显示最新状态和更新时间；只有执行 agent 判断「有新进展」才在聊天里主动发消息，标「🎯 来自目标」；已推过的图不会重复推。可以在目标页用一句话添加，也可以在聊天里说「以后每天早上 8 点告诉我天气」「机票降到 800 以下提醒我」。支持立即检查、暂停、删除。有一个「AI 维护」的目标：
+- **目标**：持续目标，定时让执行 agent 检查（每 N 分钟或每天几点）。每个目标下面一行小字显示最新状态和更新时间；只有执行 agent 判断「有新进展」才在聊天里主动发消息，标「🎯 来自目标」；已推过的图不会重复推。可以在目标页用一句话添加，也可以在聊天里说「以后每天早上 8 点告诉我天气」「机票降到 800 以下提醒我」。支持立即检查、暂停、删除。仿 Muse：卡片左边的勾选框是「完成」（不再检查，挪到「已完成」，再点一下接着盯）；在聊天里说「那个不用盯了」也会完成；执行 agent 检查时判断事情已经彻底办完（`DONE: yes`，比如一次性提醒已发出）会自动完成。点卡片展开详情：目标说明、动态时间线（建好、每次检查的结论、暂停 / 继续、完成）和下次检查时间。有一个「AI 维护」的目标：
   - 记账管家：第一次记账时自动创建，每天 21:30 查账、更新记账记忆；超预算、某类支出异常、周日小结、疑似重复记账时才在聊天里提醒。每次记账后状态小字立刻刷新为本月和今天的支出。
 - **记账**：「+」→ 记账，弹出底部面板，可以快速记一笔（支出或收入、金额、分类、备注），也能看本月汇总、明细和 AI 维护的记账记忆；也可以直接在聊天里说「午饭 35」，调度者几秒内记好。
 - **深度搜索**：遇到要全面查清楚、调研、对比、找途径的问题，调度者会派「深度搜索」任务。执行 agent 按 `skills/cattuan/deep-research` 的方法做：用 `deep_web_search` 换角度搜几轮（在沙箱真实浏览器里搜必应），用 `read_webpage` 读原文，再交叉核对，最后写一份带 [n] 引用的报告。聊天里显示为「研究报告」卡片，引用可点、有来源列表；任务卡片里有「深度搜索过程」（每次搜了什么、读了哪些网页、读到没有）和浏览器回放。读网页只读：不下载文件、不访问内网，国内站点直连。不找盗版：要免费下载付费内容时，改为找图书馆数字资源、官方免费内容和正版优惠。
@@ -105,4 +152,5 @@ X、Instagram、Weverse 不登录看不到帖子，B 站免登录也能读、只
 - B 站频繁访问会被风控（412 / -352），通常十几分钟后自动恢复；登录后更稳定。
 - 必应搜图的补充结果质量一般，靠屏蔽站点名单加 LLM 挑图来过滤。
 - 一个找图任务约 20–70 秒；调度者回复约 4–6 秒；结果转述偶尔要 20 秒左右（LongCat 接口的波动）。
-- App 写账本没有加文件锁（插件用 `ledger/.lock`），都是写前重读加原子替换，单用户场景下基本不会冲突。
+- App 写账本没有加文件锁（插件用 `ledger/.lock`），都是写前重读加原子替换；账本按人分开，同一个人同时从两处记账才可能冲突。
+- 多人时沙箱浏览器是串行的（深度搜索也走它），人多会排队。改了 `hermes-home/config.yaml` 以后，新账号自动用新的，已有账号的 config.yaml 要手动同步（技能商店会改各人那份）。

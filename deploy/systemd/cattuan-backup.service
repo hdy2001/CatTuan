@@ -1,0 +1,9 @@
+[Unit]
+Description=CatTuan 每日备份（账号库 + 每个人的数据）
+
+[Service]
+Type=oneshot
+User=cattuan
+EnvironmentFile=/etc/cattuan/cattuan.env
+Environment=BACKUP_DIR=/var/backups/cattuan
+ExecStart=/srv/cattuan/deploy/backup.sh

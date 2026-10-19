@@ -116,7 +116,12 @@ def _platform(value) -> str:
 
 
 def _task_of(kwargs: dict) -> str | None:
-    """App 在任务提示里写了「任务编号：t_xxx」；转给沙箱，App 的「浏览器」视图就知道画面属于哪个任务。"""
+    """这次调用属于 App 的哪个任务：Hermes 把会话 id（App 起的 task-<任务编号>）作为 task_id / session_id 传进来
+    （user_task 在这条调用链上一直是空的）。转给沙箱，App 的「浏览器」视图就知道画面属于哪个任务。"""
+    for key in ("task_id", "session_id"):
+        m = re.match(r"task-(t_[a-z0-9]+)$", str(kwargs.get(key) or ""))
+        if m:
+            return m.group(1)
     m = re.search(r"任务编号：(t_[a-z0-9]+)", str(kwargs.get("user_task") or ""))
     return m.group(1) if m else None
 

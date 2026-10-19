@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 
 SANDBOX = os.environ.get("CATTUAN_SANDBOX_URL", "http://127.0.0.1:8660")
 
@@ -53,10 +54,20 @@ def _clean(obj):
     return obj
 
 
-def _sandbox(path: str, **params) -> dict:
+def _task_of(kwargs: dict) -> str | None:
+    """这次调用属于 App 的哪个任务：Hermes 把会话 id（App 起的 task-<任务编号>）作为 task_id / session_id 传进来。
+    转给沙箱，App 的「浏览器」视图就知道画面属于哪个任务（多人同时用时不用靠猜）。"""
+    for key in ("task_id", "session_id"):
+        m = re.match(r"task-(t_[a-z0-9]+)$", str(kwargs.get(key) or ""))
+        if m:
+            return m.group(1)
+    return None
+
+
+def _sandbox(path: str, _task: str | None = None, **params) -> dict:
     import httpx
 
-    resp = httpx.get(f"{SANDBOX}{path}", params=params, timeout=120)
+    resp = httpx.get(f"{SANDBOX}{path}", params=params, timeout=120, headers={"x-cattuan-task": _task} if _task else None)
     try:
         return _clean(resp.json())
     except ValueError:
@@ -68,7 +79,7 @@ def deep_web_search(args: dict, **kwargs) -> str:
     if not query:
         return _dump({"error": "query 不能为空"})
     try:
-        data = _sandbox("/web/search", q=query)
+        data = _sandbox("/web/search", _task=_task_of(kwargs), q=query)
     except Exception as exc:
         return _dump({"error": f"沙箱不可用：{exc}"})
     if data.get("error"):
@@ -82,7 +93,7 @@ def read_webpage(args: dict, **kwargs) -> str:
     if not url:
         return _dump({"error": "url 不能为空"})
     try:
-        data = _sandbox("/web/read", url=url)
+        data = _sandbox("/web/read", _task=_task_of(kwargs), url=url)
     except Exception as exc:
         return _dump({"error": f"沙箱不可用：{exc}"})
     if data.get("error"):

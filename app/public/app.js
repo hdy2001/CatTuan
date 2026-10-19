@@ -1,20 +1,35 @@
 // 喵团前端：聊天（调度者短回复 + 任务/目标结果）、目标（持续目标 + 最新状态）、任务（后台执行 agent 状态）。
 // 所有数据在服务端，/api/state 拉全量，/api/events（SSE）推增量。
+// 演示模式（?mock=booking 等）：用 mock/ 下的脚本和假数据演示新流程（给 PRD 截交互图），不连服务端、不写任何数据。
+import { bookingHtml, callHtml } from './booking.js';
+
 const $ = (s) => document.querySelector(s);
+const MOCK = new URLSearchParams(location.search).get('mock');
+let mock = null; // 演示脚本：{ send(text, images) }
 const store = {
   get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
   set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
 };
+// 登录过期、账号被停用：任何接口返回 401 就回登录页（演示模式不连服务端，不用管）
+if (!MOCK) {
+  const rawFetch = window.fetch.bind(window);
+  window.fetch = async (...args) => {
+    const r = await rawFetch(...args);
+    if (r.status === 401 && String(args[0]).startsWith('/api/')) location.replace('/login');
+    return r;
+  };
+}
+const isAdmin = () => S.me?.role === 'admin';
 
 const LEDGER_CATS = {
   expense: ['餐饮', '交通', '购物', '娱乐', '旅行', '居住', '医疗', '学习', '人情', '其他'],
   income: ['工资', '副业', '红包', '其他'],
 };
-const STATUS = { queued: '排队中', running: '进行中', done: '已完成', failed: '失败', stopped: '已停止' };
+const STATUS = { queued: '排队中', running: '进行中', done: '已完成', failed: '失败', stopped: '已停止', waiting: '待你决定' };
 
 let S = { messages: [], tasks: [], goals: [] };
 let pending = [];
-let waitingReply = false;
+let waitingReply = 0; // 发出去还没等到回复的消息数（可以连着发，喵团一条条回）
 
 // ---------- 工具 ----------
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -128,9 +143,10 @@ function researchHtml(t) {
 const taskById = (id) => S.tasks.find((t) => t.id === id);
 
 // ---------- 网站（agent 用 publish_site 发布的网页） ----------
-// 网页在单独的端口上（和 App 不同源），App 用 iframe 嵌进来看。
+// 网页在单独的源上（本机是 :3211，线上是单独的子域名），App 用 iframe 嵌进来看。
 const siteById = (id) => (S.sites || []).find((s) => s.id === id);
-const siteUrl = (s) => `${location.protocol}//${location.hostname}:${S.sitesPort || 3211}/${s.id}/?v=${s.version || 1}`;
+const sitesOrigin = () => S.sitesOrigin || `${location.protocol}//${location.hostname}:3211`;
+const siteUrl = (s) => `${sitesOrigin()}/${s.id}/?v=${s.version || 1}`;
 
 function siteCards(sites, { thumb = true } = {}) {
   return (sites || []).map((x) => {
@@ -199,7 +215,8 @@ function paintLive(id) {
 const isResultMsg = (m) => m.role === 'bot' && m.taskId && ((m.goalId && m.taskId) || S.messages.some((x) => x.taskId === m.taskId && x.at < m.at));
 
 function msgHtml(m) {
-  // 任务结果消息（同一 taskId 的后一条）标来源；目标带来的新进展标目标名。进行中的任务不在聊天里挂状态条，看右下角的小电视。
+  // 任务结果消息（同一 taskId 的后一条）在时间后面跟一行小字链到任务，像真人聊天一样不另外占一个框；目标带来的新进展标目标名。
+  // 进行中的任务不在聊天里挂状态条，看右下角的小电视。
   const goal = m.goalId && S.goals.find((g) => g.id === m.goalId);
   const fromGoal = m.role === 'bot' && m.goalId && m.taskId;
   const isResult = isResultMsg(m);
@@ -209,25 +226,33 @@ function msgHtml(m) {
   if (m.images?.length) html += `<div class="thumbs">${m.images.map((u) => `<img src="${esc(u)}" alt="">`).join('')}</div>`;
   if (m.text || m.photos?.length) html += `<div class="bubble">${renderText(m.text)}${galleryHtml(m.photos)}</div>`;
   if (m.report?.body) html += reportCard(m);
+  if (m.booking) html += bookingHtml(m.booking);
   if (m.sites?.length) html += siteCards(m.sites);
+  // 一键选项只给演示流程（?mock=）用；以前普通搜索存下的选项不再显示
+  if (m.options?.length && MOCK) html += `<div class="qopts">${m.options.map((o) => `<button type="button" class="qopt" data-quick="${esc(o.send)}">${esc(o.label)}</button>`).join('')}</div>`;
   html += loginButtons(m);
   if (m.goalId && !m.taskId && goal) html += `<button type="button" class="taskchip done" data-goto-goal="${goal.id}"><b>🎯</b>新目标：${esc(goal.title)} · ${esc(scheduleLabel(goal.schedule))}</button>`;
-  if (resultOf) {
-    // 用这条消息自己记下的那一轮用时；老消息没记、任务又改过几轮，就不显示（任务现在的计时不是那一轮的）
-    const took = m.took != null ? fmtSecs(m.took) : m.round == null && (resultOf.round || 1) === 1 ? elapsed(resultOf) : '';
-    html += `<button type="button" class="fromtask" data-goto-task="${resultOf.id}">来自后台任务：${esc(resultOf.title)}${m.round > 1 ? ` · 第 ${m.round} 轮` : ''}${took ? ` · 用时 ${took}` : ''}</button>`;
-  }
   const part = m.partOf && !m.taskId; // 拆开发的前几条
-  return `<div class="msg ${m.role}${fromGoal ? ' push' : ''}${part ? ' part' : ''}" data-mid="${m.id}">${html}${part ? '' : `<time>${clock(m.at)}</time>`}</div>`;
+  const meta = resultOf
+    ? `<div class="msgmeta"><time>${clock(m.at)}</time><button type="button" class="fromtask" data-goto-task="${resultOf.id}">来自后台任务 ›</button></div>`
+    : `<time>${clock(m.at)}</time>`;
+  return `<div class="msg ${m.role}${fromGoal ? ' push' : ''}${part ? ' part' : ''}" data-mid="${m.id}">${html}${part ? '' : meta}</div>`;
 }
+
+// 喵团在干活、做完会在这个聊天里回话时显示「…」（仿 Muse：执行过程聊天里只有省略号，做到哪一步看顶栏状态）
+const agentTyping = () => waitingReply > 0
+  || (S.activity || []).some((a) => a.status === 'running' && a.replyIn && a.replyIn === S.currentChat);
+// 没有内容的机器人消息不画（以前的普通搜索会先放一条空消息占位）
+const visibleMsg = (m) => m.role !== 'bot' || m.text || m.photos?.length || m.report?.body || m.sites?.length || m.booking || (m.options?.length && MOCK);
 
 // 按消息 id 增量更新，只重画内容变了的消息：整块重画会让网站缩略图（iframe）每来一条消息就重新加载一遍。
 function renderChat() {
   const box = $('#messages');
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
   const old = new Map([...box.children].map((el) => [el.dataset.mid, el]));
+  const typing = agentTyping();
   let prev = null;
-  for (const m of S.messages) {
+  for (const m of S.messages.filter(visibleMsg)) {
     const html = msgHtml(m);
     let el = old.get(m.id);
     old.delete(m.id);
@@ -243,7 +268,7 @@ function renderChat() {
     prev = el;
   }
   old.forEach((el) => el.remove());
-  if (waitingReply) box.insertAdjacentHTML('beforeend', '<div class="msg bot" data-mid="_typing"><div class="bubble"><span class="typing"><i></i><i></i><i></i></span></div></div>');
+  if (typing) box.insertAdjacentHTML('beforeend', '<div class="msg bot" data-mid="_typing"><div class="bubble"><span class="typing"><i></i><i></i><i></i></span></div></div>');
   if (nearBottom || waitingReply) box.scrollTop = box.scrollHeight;
 }
 
@@ -293,13 +318,14 @@ $('#tv').addEventListener('click', (e) => {
   $('#tv').classList.add('appear'); // 收起 / 展开时动一下
   setTimeout(() => $('#tv').classList.remove('appear'), 400);
 });
-// 小电视放在输入框上方：输入框（和加号面板）高度变了就跟着挪
-new ResizeObserver(() => $('#chatView').style.setProperty('--composer-h', `${$('#composer').offsetHeight}px`)).observe($('#composer'));
+// 小电视（和演示控制条）放在输入框上方：输入框（和加号面板、演示入口）高度变了就跟着挪。设在根上，挂在 body 上的演示控制条也能用
+new ResizeObserver(() => document.documentElement.style.setProperty('--composer-h', `${$('#composer').offsetHeight}px`)).observe($('#composer'));
 
 async function send(text, images) {
   if (!text.trim() && !images.length) return;
-  waitingReply = true;
-  $('#send').disabled = true;
+  if (MOCK) return mock?.send(text, images);
+  // 喵团在想上一条时也能接着发（仿 Muse）：每条各自回，顶栏状态显示它在做哪一步
+  waitingReply++;
   // 先本地显示，服务端广播回来时按内容去重。
   S.messages.push({ id: `local_${Date.now()}`, role: 'me', text, images, at: new Date().toISOString(), local: true });
   renderChat();
@@ -307,10 +333,8 @@ async function send(text, images) {
     const r = await fetch('/api/message', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text, images }) });
     if (!r.ok) throw new Error((await r.json()).error || r.status);
   } catch (e) {
+    waitingReply = Math.max(0, waitingReply - 1);
     S.messages.push({ id: `local_err_${Date.now()}`, role: 'bot', text: `发送失败：${e.message}`, at: new Date().toISOString(), local: true });
-  } finally {
-    waitingReply = false;
-    $('#send').disabled = false;
     renderChat();
   }
 }
@@ -337,17 +361,22 @@ function taskCard(t) {
       <span class="pill ${t.status}">${t.status === 'running' || t.status === 'queued' ? '<i class="spin"></i>' : ''}${STATUS[t.status]}</span>
       <strong>${esc(t.title)}</strong>
       ${t.round > 1 ? `<span class="roundtag">第 ${t.round} 轮</span>` : ''}
-      <span class="kind">${t.kind === 'goal' ? '目标检查' : t.kind === 'research' ? '深度搜索' : '对话'}</span>
+      <span class="kind">${t.kind === 'goal' ? '目标检查' : t.kind === 'research' ? '深度搜索' : t.kind === 'call' ? '电话预约' : '对话'}</span>
     </header>
     <div class="tmeta">${clock(t.createdAt)} 派出 · ${t.status === 'queued' ? '等待中' : `用时 <span data-elapsed="${t.status === 'running' ? t.id : ''}">${elapsed(t)}</span>`}</div>
     ${steps}
     ${browserView(t)}
+    ${callHtml(t)}
     ${researchHtml(t)}
     ${revisionsHtml(t)}
     <details><summary>任务说明</summary><div class="brief">${renderText(t.brief)}</div></details>
     ${result}
+    ${t.traced ? traceLink(`sessions/task-${t.id}`) : ''}
   </article>`;
 }
+
+// 调试用：开了 Langfuse（scripts/start-langfuse.sh）才有。任务链到 Langfuse 会话 task-<id>（调度者 + 执行 agent 的完整轨迹），动态链到它那条 trace。
+const traceLink = (path) => (S.traceBase ? `<a class="alink" href="${esc(`${S.traceBase}/${path}`)}" target="_blank" rel="noopener">轨迹 ›</a>` : '');
 
 // 用户中途 / 做完后提的修改，以及每条的去向
 const REV_STATE = {
@@ -370,6 +399,7 @@ $('#tasks').addEventListener('click', async (e) => {
     $('#lightbox').hidden = false;
     return;
   }
+  if (MOCK) return; // 演示里的任务是假的，不去调服务端
   const stop = e.target.closest('[data-task-stop]');
   if (stop) {
     stop.disabled = true;
@@ -391,6 +421,7 @@ function renderTasks() {
   $('#taskBadge').hidden = !active;
   $('#taskBadge').textContent = `${active} 进行中`;
   setStatusText();
+  renderActivity();
 }
 
 // ---------- 目标 ----------
@@ -404,42 +435,73 @@ function ago(iso) {
   return `${Math.floor(s / 86400)} 天前`;
 }
 
+// 今天的只写时间，别的日子带上日期
+const dayClock = (iso) => {
+  const d = new Date(iso);
+  return d.toDateString() === new Date().toDateString() ? clock(iso) : `${d.getMonth() + 1}月${d.getDate()}日 ${clock(iso)}`;
+};
+let openGoal = null; // 展开详情的那个目标
+
+// 目标卡片（仿 Muse）：左边勾选框 = 完成；点卡片展开详情（目标说明、动态时间线、下次检查）
 function goalCard(g) {
-  const checking = S.tasks.find((t) => t.goalId === g.id && (t.status === 'running' || t.status === 'queued'));
-  const status = checking
-    ? `<i class="spin"></i>正在检查${checking.steps?.length ? ` · ${esc(checking.steps.at(-1).label)}` : ''}`
+  const checking = !g.done && S.tasks.find((t) => t.goalId === g.id && (t.status === 'running' || t.status === 'queued'));
+  const status = g.done ? `已完成${g.doneAt ? ` · ${ago(g.doneAt)}` : ''}`
+    : checking ? `<i class="spin"></i>正在检查${checking.steps?.length ? ` · ${esc(checking.steps.at(-1).label)}` : ''}`
     : `${esc(g.status?.text || '等待第一次检查')}${g.status?.at ? ` · ${ago(g.status.at)}` : ''}`;
-  return `<article class="card goal${g.enabled ? '' : ' off'}" id="goal-${g.id}">
-    <div class="gmain">
+  const open = openGoal === g.id;
+  const log = [...(g.log || [])].reverse();
+  const detail = open ? `<div class="gdetail">
+      <div class="gdlabel">目标说明</div><div class="gdesc">${renderText(g.brief)}</div>
+      <div class="gdlabel">动态</div>
+      ${log.length ? `<ol class="glog">${log.map((x) => `<li><time>${dayClock(x.at)}</time><span>${esc(x.text)}</span></li>`).join('')}</ol>`
+        : `<div class="gdempty">这个目标建得早，还没有动态记录。最新状态：${esc(g.status?.text || '—')}</div>`}
+      ${!g.done && g.enabled && g.nextRunAt ? `<div class="gnext">下次检查：${dayClock(g.nextRunAt)}</div>` : ''}
+    </div>` : '';
+  return `<article class="card goal${g.enabled || g.done ? '' : ' off'}${g.done ? ' done' : ''}${open ? ' open' : ''}" id="goal-${g.id}">
+    <button type="button" class="gcheck${g.done ? ' on' : ''}" data-goal-done="${g.id}" aria-label="${g.done ? '取消完成' : '标记完成'}" title="${g.done ? '取消完成，接着盯' : '完成了，不用再盯'}"></button>
+    <div class="gmain" role="button" tabindex="0" data-goal-open="${g.id}" aria-expanded="${open}">
       <div class="gtitle">${esc(g.title)}${g.createdBy === 'ai' ? '<span class="aibadge">AI 维护</span>' : ''}</div>
-      <div class="gstatus${g.status?.error ? ' err' : ''}">${status}</div>
-      <div class="gmeta">${scheduleLabel(g.schedule)}${g.enabled ? '' : ' · 已暂停'}</div>
+      <div class="gstatus${g.status?.error && !g.done ? ' err' : ''}">${status}</div>
+      <div class="gmeta">${scheduleLabel(g.schedule)}${g.done || g.enabled ? '' : ' · 已暂停'}</div>
     </div>
     <div class="gactions">
-      <button type="button" data-goal-run="${g.id}" title="现在检查" ${checking || !g.enabled ? 'disabled' : ''}>↻</button>
-      <label class="switch" title="${g.enabled ? '暂停' : '启用'}"><input type="checkbox" data-goal-toggle="${g.id}" ${g.enabled ? 'checked' : ''}><span></span></label>
+      ${g.done ? '' : `<button type="button" data-goal-run="${g.id}" title="现在检查" ${checking || !g.enabled ? 'disabled' : ''}>↻</button>
+      <label class="switch" title="${g.enabled ? '暂停' : '启用'}"><input type="checkbox" data-goal-toggle="${g.id}" ${g.enabled ? 'checked' : ''}><span></span></label>`}
       <button type="button" data-goal-del="${g.id}" title="删除">×</button>
     </div>
+    ${detail}
   </article>`;
 }
 
 function renderGoals() {
-  $('#goalCount').textContent = S.goals.length || '';
-  $('#goals').innerHTML = S.goals.map(goalCard).join('') || '<div class="empty">还没有目标。告诉喵团想让它一直盯着什么，比如「每天早上告诉我天气」「机票降到 800 以下提醒我」。</div>';
+  const active = S.goals.filter((g) => !g.done);
+  const done = S.goals.filter((g) => g.done);
+  $('#goalCount').textContent = active.length || '';
+  $('#goals').innerHTML = (active.length ? `<div class="gsection">正在盯 · ${active.length}</div>${active.map(goalCard).join('')}`
+    : '<div class="empty">还没有目标。告诉喵团想让它一直盯着什么，比如「每天早上告诉我天气」「机票降到 800 以下提醒我」。</div>')
+    + (done.length ? `<div class="gsection">已完成 · ${done.length}</div>${done.map(goalCard).join('')}` : '');
 }
 
 // ---------- 同步 ----------
 async function loadState() {
+  if (MOCK) return; // 演示模式只用演示脚本的数据
   try { S = await (await fetch('/api/state')).json(); } catch { return; }
-  renderChat(); renderTasks(); renderGoals(); renderChatBar(); renderTV();
+  renderChat(); renderTasks(); renderGoals(); renderChatBar(); renderTV(); renderMe();
   if (!$('#drawer').hidden && !$('#chatSearch').value.trim()) renderChatsList();
   if (!loadState.autoLocated) { loadState.autoLocated = true; autoUpdateLocation(); }
+}
+
+// 侧边栏底部的当前账号
+function renderMe() {
+  $('#meName').textContent = S.me?.name || '';
+  $('#meRole').hidden = !isAdmin();
 }
 
 function connect() {
   const es = new EventSource('/api/events');
   es.onopen = () => setOnline(true);
-  es.onerror = () => setOnline(false);
+  // 断了：可能是网络，也可能是登录过期（EventSource 看不到状态码），问一下，401 会回登录页
+  es.onerror = () => { setOnline(false); fetch('/api/auth/me').catch(() => {}); };
   es.onmessage = (e) => {
     const ev = JSON.parse(e.data);
     if (ev.type === 'hello') return loadState();
@@ -453,8 +515,8 @@ function connect() {
         const i = S.messages.findIndex((x) => x.local && x.role === 'me' && x.text === m.text);
         if (i >= 0) S.messages.splice(i, 1);
       }
-      if (!S.messages.some((x) => x.id === m.id)) S.messages.push(m);
-      if (m.role === 'bot') waitingReply = false;
+      const at = S.messages.findIndex((x) => x.id === m.id);
+      if (at >= 0) S.messages[at] = m; else { S.messages.push(m); if (m.role === 'bot') waitingReply = Math.max(0, waitingReply - 1); } // 同一条消息会更新（普通搜索先显示过程、搜完填回答）
       renderChat();
     } else if (ev.type === 'task') {
       const i = S.tasks.findIndex((t) => t.id === ev.task.id);
@@ -478,6 +540,13 @@ function connect() {
       // 第一帧到之前还没有 <img>：重画一次，之后只换图
       if (!document.querySelector(`[data-bimg="${ev.taskId}"]`)) { renderTV(); renderTasks(); }
       paintLive(ev.taskId);
+    } else if (ev.type === 'activity') {
+      const list = (S.activity ||= []);
+      const i = list.findIndex((a) => a.id === ev.activity.id);
+      if (i >= 0) list[i] = ev.activity; else list.push(ev.activity);
+      setStatusText();
+      renderActivity();
+      renderChat(); // 聊天里的「…」跟着主 agent 有没有在干活走
     } else if (ev.type === 'goal') {
       const i = S.goals.findIndex((g) => g.id === ev.goal.id);
       if (i >= 0) S.goals[i] = ev.goal; else S.goals.push(ev.goal);
@@ -502,11 +571,68 @@ function connect() {
 
 let online = false;
 function setOnline(v) { online = v; setStatusText(); }
+// 顶栏状态：喵团（主 agent）手上有事时显示正在做的那一步（同时几件事就显示最新那件，带件数）；
+// 没事时显示后台任务数或「在线」。
 function setStatusText() {
   const active = S.tasks.filter((t) => t.status === 'running').length;
+  const busy = (S.activity || []).filter((a) => a.status === 'running');
+  const now = busy.at(-1);
   $('#dot').classList.toggle('on', online);
-  $('#statusText').textContent = !online ? '连接中…' : active ? `后台 ${active} 个任务进行中` : '在线';
+  $('#dot').classList.toggle('busy', online && !!now);
+  $('#statusBtn').classList.toggle('busy', online && !!now);
+  $('#statusText').textContent = !online ? '连接中…'
+    : now ? `${now.step || '想想怎么回'}…${busy.length > 1 ? ` · ${busy.length} 件事` : ''}`
+    : active ? `后台 ${active} 个任务进行中` : '在线';
+  $('#statusBtn').title = now ? `${now.title}：${now.step || ''}` : '查看喵团动态';
+  $('#actBadge').textContent = busy.length ? `${busy.length} 件进行中` : '';
 }
+
+// ---------- 喵团动态（仿 Muse Activity）：主 agent 每件事一条，正在做的显示步骤；上面是后台在跑的任务 ----------
+const ACT_KIND = { message: '💬', deliver: '📨', goal: '🎯' };
+
+function activityItem(a) {
+  const running = a.status === 'running';
+  const icon = running ? '<i class="spin"></i>' : a.status === 'failed' ? '⚠️' : ACT_KIND[a.kind] || '✓';
+  const toGoal = a.goalId && (a.kind === 'goal' || !a.taskId); // 目标相关的动态跳目标，其余有任务的跳任务
+  const goto = toGoal ? ` data-goto-goal="${esc(a.goalId)}"` : a.taskId ? ` data-goto-task="${esc(a.taskId)}"` : '';
+  const steps = a.steps?.length
+    ? `<details class="asteps"${running ? ' open' : ''}><summary>过程 · ${a.steps.length} 步${a.endedAt ? ` · 用时 ${fmtSecs(Math.max(0, Math.round((Date.parse(a.endedAt) - Date.parse(a.at)) / 1000)))}` : ''}</summary>`
+      + `<ol>${a.steps.map((s, i) => `<li class="${running && i === a.steps.length - 1 ? 'now' : ''}"><time>${clock(s.at)}</time>${esc(s.text)}</li>`).join('')}</ol></details>` : '';
+  return `<li class="aitem ${esc(a.status)}">
+    <span class="aicon">${icon}</span>
+    <div class="abody">
+      <div class="ahead"><b>${esc(a.title)}</b><time>${clock(a.at)}</time></div>
+      <small>${running ? `正在${esc(a.step || '想想怎么回')}…` : esc(a.outcome || '')}</small>
+      ${steps}${goto ? `<button type="button" class="alink"${goto}>${toGoal ? '看目标' : '看任务'} ›</button>` : ''}${a.traceId ? traceLink(`traces/${a.traceId}`) : ''}
+    </div>
+  </li>`;
+}
+
+function renderActivity() {
+  if ($('#activitySheet').hidden) return;
+  const tasks = S.tasks.filter((t) => t.status === 'running' || t.status === 'queued');
+  const running = tasks.length ? `<div class="agroup">后台在跑 · ${tasks.length}</div><ul class="arun">${tasks.map((t) => `<li><button type="button" data-goto-task="${esc(t.id)}">
+      <i class="spin"></i><b>${esc(t.title)}</b><small>${t.status === 'queued' ? '排队中' : esc(t.steps?.at(-1)?.label || '思考中')}</small></button></li>`).join('')}</ul>` : '';
+  let group = '';
+  const items = [...(S.activity || [])].reverse().map((a) => {
+    const g = chatGroup(a.at);
+    return `${g !== group ? `<div class="agroup">${(group = g)}</div>` : ''}${activityItem(a)}`;
+  }).join('');
+  $('#activityList').innerHTML = running + (items ? `<ul class="alist">${items}</ul>` : '<div class="empty">喵团还没做过事。跟它说句话试试～</div>');
+}
+
+function openActivity() {
+  togglePanel(false);
+  closeDrawer();
+  $('#activitySheet').hidden = false;
+  renderActivity();
+}
+
+$('#statusBtn').addEventListener('click', openActivity);
+$('#activitySheet').addEventListener('click', (e) => {
+  // 点「看任务 / 看目标」：关掉面板，交给下面全局的 data-goto-* 处理跳转
+  if (e.target === $('#activitySheet') || e.target.closest('[data-close-sheet]') || e.target.closest('[data-goto-task], [data-goto-goal]')) $('#activitySheet').hidden = true;
+});
 
 // 进行中的任务每秒刷新计时。
 setInterval(() => {
@@ -614,8 +740,24 @@ $('#goalForm').addEventListener('submit', async (e) => {
 $('#goals').addEventListener('click', async (e) => {
   const run = e.target.closest('[data-goal-run]')?.dataset.goalRun;
   const del = e.target.closest('[data-goal-del]')?.dataset.goalDel;
+  const done = e.target.closest('[data-goal-done]')?.dataset.goalDone;
+  const open = e.target.closest('[data-goal-open]')?.dataset.goalOpen;
+  if (done) {
+    const g = S.goals.find((x) => x.id === done);
+    if (g) await fetch(`/api/goals/${done}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ done: !g.done }) });
+    return;
+  }
+  if (open) { openGoal = openGoal === open ? null : open; renderGoals(); return; }
   if (run) await fetch(`/api/goals/${run}/run`, { method: 'POST' });
   if (del && confirm('删掉这个目标？')) await fetch(`/api/goals/${del}`, { method: 'DELETE' });
+});
+$('#goals').addEventListener('keydown', (e) => {
+  const open = (e.key === 'Enter' || e.key === ' ') && e.target.closest('[data-goal-open]')?.dataset.goalOpen;
+  if (!open) return;
+  e.preventDefault();
+  openGoal = openGoal === open ? null : open;
+  renderGoals();
+  document.querySelector(`[data-goal-open="${open}"]`)?.focus();
 });
 $('#goals').addEventListener('change', (e) => {
   const id = e.target.dataset.goalToggle;
@@ -710,12 +852,12 @@ function renderSessions() {
     box.innerHTML = `<div class="empty">${esc(SESS?.message || '读取中…')}</div>`;
     return;
   }
-  const loginOn = SESS.mode === 'login' && SESS.platforms.find((p) => p.id === SESS.login);
+  const loginOn = isAdmin() && SESS.mode === 'login' && SESS.platforms.find((p) => p.id === SESS.login);
   box.innerHTML = `${loginOn ? `<div class="logintip"><span>登录窗口已打开：在电脑上弹出的窗口里自己登录 <b>${esc(loginOn.label)}</b>（扫码或输入账号密码，喵团看不到你的密码）。${loginOn.loggedIn ? '已检测到登录 ✓ ' : ''}登好后关掉窗口，或点「完成」。</span><button type="button" data-login-done>完成</button></div>` : ''}
     <div class="plats memo">${SESS.platforms.map((p) => {
       const label = !p.canLogin ? '免登录' : p.loggedIn ? '已登录' : p.expired ? '登录已过期' : p.needsLogin ? '未登录' : '免登录可读';
       const cls = !p.canLogin || p.loggedIn ? 'ok' : p.needsLogin || p.expired ? 'need' : 'opt';
-      const btn = p.canLogin ? `<button type="button" class="${p.loggedIn ? 'ghost' : ''}" data-login="${p.id}">${p.loggedIn ? '重新登录' : '登录'}</button>` : '';
+      const btn = p.canLogin && isAdmin() ? `<button type="button" class="${p.loggedIn ? 'ghost' : ''}" data-login="${p.id}">${p.loggedIn ? '重新登录' : '登录'}</button>` : '';
       const follows = FOLLOWS.filter((a) => (a.platform || 'weibo') === p.id);
       const followText = follows.length ? `已关注：${follows.map((a) => `${esc(a.name)}${a.idol ? `（${esc(a.idol)}）` : ''}`).join('、')}` : '还没关注这个平台的账号';
       return `<div class="plat ${cls}" title="${esc(p.note)}"><i></i><span><b>${esc(p.label)}<em>${label}</em></b><small>${followText}</small></span>${btn}</div>`;
@@ -725,6 +867,7 @@ function renderSessions() {
 
 async function openAccounts() {
   $('#accountsSheet').hidden = false;
+  if (!isAdmin()) $('#accSub').textContent = '这些平台上的公开账号都可以读：品牌、机构、博主、朋友的公开主页都行，只看不发、不点赞、不评论。平台账号由管理员统一登录，你只管让喵团关注和读。';
   try { FOLLOWS = await (await fetch('/api/follows')).json(); } catch { FOLLOWS = []; }
   refreshSessions();
 }
@@ -748,7 +891,7 @@ function renderLocation() {
 }
 
 function locationErrorText(err) {
-  if (!window.isSecureContext) return '浏览器只允许在 https 或 localhost 页面上定位。请用 http://localhost:3210 打开喵团。';
+  if (!window.isSecureContext) return '浏览器只允许在 https 或 localhost 页面上定位。请用 https 地址（或本机的 http://localhost:3210）打开喵团。';
   if (!navigator.geolocation) return '这个浏览器不支持定位。';
   if (err?.code === 1) return '浏览器没有给喵团位置权限：点地址栏左边的站点设置，把「位置」改成允许，然后再点一次「更新位置」。';
   if (err?.code === 2) return '系统定位不可用：在「系统设置 → 隐私与安全性 → 定位服务」里打开定位，并允许你正在用的浏览器。';
@@ -874,7 +1017,7 @@ $('#skillsSheet').addEventListener('toggle', async (e) => {
 // 消息里提到「登录 X」时，在消息下面放一个直接打开登录窗口的按钮。
 const LOGIN_IDS = { x: 'x', instagram: 'instagram', ig: 'instagram', weverse: 'weverse', b站: 'bilibili', 小红书: 'xiaohongshu' };
 function loginButtons(m) {
-  if (m.role !== 'bot' || !m.text) return '';
+  if (m.role !== 'bot' || !m.text || !isAdmin()) return ''; // 平台账号由管理员统一登录，成员这里不放按钮
   const ids = [...new Set([...m.text.matchAll(/登录\s*(X|Instagram|IG|Weverse|B\s?站|小红书)/gi)]
     .map((x) => LOGIN_IDS[x[1].toLowerCase().replace(/\s/g, '')]).filter(Boolean))];
   const plat = (id) => SESS?.platforms?.find((p) => p.id === id);
@@ -896,6 +1039,7 @@ document.addEventListener('click', (e) => {
   const login = e.target.closest('[data-login]');
   if (login) openLogin(login.dataset.login, login);
   else if (e.target.closest('[data-login-done]')) fetch('/api/login/done', { method: 'POST' }).finally(refreshSessions);
+  else if (e.target.closest('[data-logout]')) fetch('/api/auth/logout', { method: 'POST' }).finally(() => location.replace('/login'));
 });
 // 从登录窗口切回来时刷新一下状态。
 window.addEventListener('focus', () => { if (!$('#accountsSheet').hidden || SESS?.mode === 'login') refreshSessions(); });
@@ -951,6 +1095,7 @@ function openDrawer() {
 const closeDrawer = () => { $('#drawer').hidden = true; };
 
 async function chatAction(url, method) {
+  if (MOCK) return false;
   const r = await fetch(url, { method });
   if (!r.ok) { alert((await r.json().catch(() => ({}))).error || '没弄成'); return false; }
   await loadState();
@@ -969,6 +1114,7 @@ $('#topLeft').addEventListener('click', () => ($('#chatView').hidden ? showView(
 $('#drawer').addEventListener('click', async (e) => {
   if (!e.target.closest('.drawerbody')) return closeDrawer(); // 点右边的遮罩关掉
   if (e.target.closest('[data-chat-new]')) return startNewChat();
+  if (e.target.closest('[data-open-activity]')) return openActivity();
   const view = e.target.closest('[data-goto-view]')?.dataset.gotoView;
   if (view) { closeDrawer(); return showView(view); }
   const viewer = e.target.closest('[data-open-viewer]')?.dataset.openViewer;
@@ -1075,7 +1221,7 @@ async function openResume() {
   $('#resumeBody').innerHTML = `<div class="dd-page">
     <div class="dd-updated">最后更新于 ${today.getFullYear()} 年 ${today.getMonth() + 1} 月 ${today.getDate()} 日</div>
     <h1 class="dd-name">喵　团</h1>
-    <div class="dd-contact">localhost:3210 ｜ 7×24 小时在线 ｜ ${esc(p.model || 'LongCat')}</div>
+    <div class="dd-contact">${esc(location.host)} ｜ 7×24 小时在线 ｜ ${esc(p.model || 'LongCat')}</div>
     <hr>
     <div class="dd-cols">
       <aside>
@@ -1083,7 +1229,7 @@ async function openResume() {
           <div class="dd-ent"><b>LongCat 大模型</b><span>${esc(p.model || 'LongCat')}<br>主修中文对话与工具调用</span><time>2026</time></div>
         </section>
         <section><h2>链接</h2>
-          <p>App:// <b>localhost:3210</b><br>网站:// <b>localhost:3211</b><br>（已上线 ${n(p.sites)} 个网页）<br>技能:// <b>hermes-home/skills</b></p>
+          <p>App:// <b>${esc(location.host)}</b><br>网站:// <b>${esc(sitesOrigin().replace(/^\w+:\/\//, ''))}</b><br>（已上线 ${n(p.sites)} 个网页）<br>技能:// <b>hermes-home/skills</b></p>
         </section>
         <section><h2>技能</h2>
           <h3>调研</h3><small>精通</small><p>深度搜索 · 研究报告 · 交叉核对</p>
@@ -1284,6 +1430,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && !$('#siteBrowser').hidden) closeSite();
   if (e.key === 'Escape' && !$('#reportReader').hidden) $('#reportReader').hidden = true;
   if (e.key === 'Escape' && !$('#drawer').hidden) closeDrawer();
+  if (e.key === 'Escape') $('#activitySheet').hidden = true;
   if (e.key === 'Escape') { $('#idViewer').hidden = true; $('#resumeViewer').hidden = true; }
   const rc = (e.key === 'Enter' || e.key === ' ') && e.target.closest?.('[data-open-report]');
   if (rc) { e.preventDefault(); openReport(rc.dataset.openReport); }
@@ -1300,10 +1447,12 @@ function showView(view) {
   $('#topLeft').setAttribute('aria-label', view === 'chat' ? '打开侧边栏' : '返回聊天');
   $('#topTitle').textContent = VIEW_TITLE[view] || currentChat()?.title || NEW_CHAT_TITLE;
   closeDrawer();
-  store.set('cattuan.view', view);
+  if (!MOCK) store.set('cattuan.view', view);
 }
 
 document.addEventListener('click', (e) => {
+  const quick = e.target.closest('[data-quick]'); // 搜不到时给的一键选项：替用户把这句话发出去
+  if (quick) { send(quick.dataset.quick, []); return; }
   const report = e.target.closest('[data-open-report]');
   if (report) { openReport(report.dataset.openReport); return; }
   const site = e.target.closest('[data-open-site]');
@@ -1316,7 +1465,9 @@ document.addEventListener('click', (e) => {
   }
   const gotoGoal = e.target.closest('[data-goto-goal]');
   if (gotoGoal) {
+    openGoal = gotoGoal.dataset.gotoGoal; // 从聊天 / 动态跳过来：直接展开这个目标的详情
     showView('goals');
+    renderGoals();
     document.getElementById(`goal-${gotoGoal.dataset.gotoGoal}`)?.scrollIntoView({ block: 'start' });
     return;
   }
@@ -1414,7 +1565,9 @@ function catPortraitSvg() {
     const inp = $('#input').getBoundingClientRect();
     const bar = document.querySelector('.top')?.getBoundingClientRect();
     if (!v.width || !inp.width || !bar?.width) return false;
-    const floor = inp.top - v.top + 1;      // 输入框上沿
+    const banner = $('#demoBanner');
+    const ground = banner?.offsetParent ? banner.getBoundingClientRect().top : inp.top;
+    const floor = ground - v.top + 1;         // 输入区上沿（有演示入口就站在入口上面，不挡字）
     const ceil = bar.bottom - v.top - 1;      // 顶栏下沿（倒挂着爬）
     const wall = v.width - 1;                 // 右边的墙
     const start = inp.left - v.left + HALF + 6;
@@ -1472,6 +1625,33 @@ function catPortraitSvg() {
   requestAnimationFrame(tick);
 })();
 
-showView(store.get('cattuan.view', 'chat'));
-refreshSessions(); // 聊天里的「登录」按钮也要知道哪些平台已登录
-connect();
+// ---------- 演示模式：mock/<名字>.js 接管聊天里的数据和发送，给它画界面需要的几个函数 ----------
+async function startMock() {
+  setOnline(true);
+  S = { messages: [], tasks: [], goals: [], chats: [{ id: 'mock', title: '演示', updatedAt: new Date().toISOString() }], currentChat: 'mock' };
+  const script = await import(`./mock/${encodeURIComponent(MOCK)}.js`).catch(() => null);
+  if (!script) {
+    S.messages.push({ id: 'mock_missing', role: 'bot', text: `没有找到演示脚本 mock/${MOCK}.js`, at: new Date().toISOString() });
+    return renderChat();
+  }
+  mock = script.start({
+    S,
+    showView,
+    render: () => { renderChat(); renderTasks(); renderTV(); renderChatBar(); },
+    typing: (on) => { waitingReply = on; renderChat(); },
+  });
+}
+
+if (MOCK) {
+  // 输入框上面的演示入口在演示里变成「返回喵团」
+  $('#demoBanner').href = '/';
+  $('#demoBanner').classList.add('in-demo');
+  $('#demoBanner .dbtext').innerHTML = `<b>演示中${MOCK === 'booking' ? ' · 电话预约' : ''}</b><small>假数据，刷新回到当前这一步</small>`;
+  $('#demoBanner em').textContent = '返回喵团 ›';
+  showView('chat');
+  startMock();
+} else {
+  showView(store.get('cattuan.view', 'chat'));
+  refreshSessions(); // 聊天里的「登录」按钮也要知道哪些平台已登录
+  connect();
+}

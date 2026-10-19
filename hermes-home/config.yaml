@@ -20,7 +20,16 @@ agent:
 
 # idol_photo_search（图片搜索）+ official_account / official_photos（经沙箱读官方号）
 plugins:
-  enabled: [idol-photos, official-accounts, ledger, skill-store, deep-search, site-builder, cattuan-bridge]
+  enabled:
+    - cattuan-bridge
+    - deep-search
+    - idol-photos
+    - langfuse
+    - ledger
+    - official-accounts
+    - site-builder
+    - skill-store
+  disabled: []
 
 # App 只走 API server：搜图、识图、记忆、记账、技能、深度搜索、发布网页。不给终端/文件/浏览器/生图。
 platform_toolsets:
@@ -89,3 +98,5 @@ skills:
     - xurl
     - youtube-content
 _config_version: 51
+_left_core_installed:
+  - langfuse

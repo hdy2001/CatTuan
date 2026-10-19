@@ -29,23 +29,25 @@ const GAP = 5_000; // 同一平台两次页面访问的最小间隔
 // 用 Playwright 缓存里的 Chrome for Testing（playwright-core 1.63.0 ↔ chromium-1243）。
 // 优先用 sandbox/chrome/ 下的副本：它的 Info.plist 补了蓝牙用途说明并重新签名。原版缺这项，
 // Google 登录页尝试蓝牙通行密钥时会被 macOS 隐私保护（TCC）直接杀掉 —— 表现为登录窗口「闪退」。
-// 生成副本：scripts/patch-sandbox-chrome.sh
+// 生成副本：scripts/patch-sandbox-chrome.sh。Linux 服务器上用 `npx playwright-core install --with-deps chromium` 装的那份。
 function chromePath() {
   if (process.env.SANDBOX_CHROME) return process.env.SANDBOX_CHROME;
   const patched = path.join(DIR, 'chrome/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing');
   if (fs.existsSync(patched)) return patched;
-  const root = path.join(os.homedir(), 'Library/Caches/ms-playwright');
+  const root = process.env.PLAYWRIGHT_BROWSERS_PATH || path.join(os.homedir(), process.platform === 'darwin' ? 'Library/Caches/ms-playwright' : '.cache/ms-playwright');
   const dir = fs.existsSync(root) && fs.readdirSync(root).filter((d) => /^chromium-\d+$/.test(d)).sort().pop();
-  const exe = dir && path.join(root, dir, 'chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing');
-  return exe && fs.existsSync(exe) ? exe : undefined;
+  return dir && ['chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',
+    'chrome-mac-x64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing', 'chrome-linux64/chrome', 'chrome-linux/chrome']
+    .map((p) => path.join(root, dir, p)).find((p) => fs.existsSync(p));
 }
 const CHROME = chromePath();
 
-// 无头模式的 UA 带 "HeadlessChrome"，B 站会直接 -352。换成同版本的普通 Chrome UA，和登录窗口里的一致。
+// 无头模式的 UA 带 "HeadlessChrome"，B 站会直接 -352。换成同版本的普通 Chrome UA，和登录窗口里的一致；系统写真实的，免得和 navigator.platform 对不上。
 function chromeMajor() {
   try { return /(\d+)\./.exec(execFileSync(CHROME, ['--version'], { encoding: 'utf8', timeout: 15_000 }))[1]; } catch { return '140'; }
 }
-const UA = `Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeMajor()}.0.0.0 Safari/537.36`;
+const UA_OS = process.platform === 'darwin' ? 'Macintosh; Intel Mac OS X 10_15_7' : process.platform === 'win32' ? 'Windows NT 10.0; Win64; x64' : 'X11; Linux x86_64';
+const UA = `Mozilla/5.0 (${UA_OS}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${chromeMajor()}.0.0.0 Safari/537.36`;
 
 // session：判断「已登录」的 cookie。optional：不登录也能读（登录只用来躲风控）。
 const PLATFORMS = {

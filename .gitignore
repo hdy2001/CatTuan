@@ -14,6 +14,9 @@ __pycache__/
 *.log
 *.out
 
+# ---- 从学城内部资料整理出来的文档（仅供内部使用）：只留在本机，贴到学城用 ----
+docs/internal/
+
 # ---- App：运行时数据（聊天记录、上传的图、浏览回放、备份） ----
 app/data/
 
@@ -30,6 +33,9 @@ hermes-home/*
 !hermes-home/SOUL.md
 !hermes-home/.env.example
 !hermes-home/plugins/
+# Hermes 官方目录插件（scripts/start-langfuse.sh 装），装的记录也不进仓库
+hermes-home/plugins/langfuse/
+hermes-home/plugins/.install-metadata.json*
 !hermes-home/skills/
 hermes-home/skills/*
 !hermes-home/skills/cattuan/
