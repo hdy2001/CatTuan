@@ -138,12 +138,6 @@ section { background: var(--bg); }
 .log pre { white-space: pre-wrap; word-break: break-all; background: var(--soft); padding: 6px 8px; border-radius: 6px; margin: 4px 0; max-height: 300px; overflow-y: auto; }
 .filters { display: flex; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); flex-wrap: wrap; align-items: center; }
 .filters label { font-size: 12px; color: var(--mute); display: flex; gap: 3px; align-items: center; }
-.req { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid var(--line); }
-.req .line { display: flex; gap: 6px; }
-.req .line input { flex: 1; min-width: 0; }
-.req textarea { min-height: 70px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
-.req .quick { display: flex; gap: 5px; flex-wrap: wrap; }
-.req .quick button { font-size: 12px; padding: 3px 8px; }
 .toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw; }
 .toast.on { opacity: .95; }
 .mobile-tabs { display: none; }
@@ -168,7 +162,7 @@ section { background: var(--bg); }
 <body>
 <header>
   <h1>🐱 喵团 Playground</h1>
-  <nav><a class="on" href="api.html">Playground</a><a href="api-docs.html">接口文档</a></nav>
+  <nav><a class="on" href="api.html">Playground</a><a href="api-test.html">接口测试</a><a href="api-docs.html">接口文档</a></nav>
   <div class="auth">
     <span class="pill"><span class="dot" id="sseDot"></span><span id="sseText">SSE 未连接</span></span>
     <span class="pill" id="who">检查登录中…</span>
@@ -213,7 +207,6 @@ section { background: var(--bg); }
       <button data-p="tasks" class="on">任务<span class="n" id="nTasks"></span></button>
       <button data-p="events">SSE 事件<span class="n" id="nEvents"></span></button>
       <button data-p="http">HTTP<span class="n" id="nHttp"></span></button>
-      <button data-p="req">发请求</button>
     </div>
     <div class="pane on" data-p="tasks"><div class="scroll" id="tasks"></div></div>
     <div class="pane" data-p="events">
@@ -227,26 +220,8 @@ section { background: var(--bg); }
       <div class="log" id="events"></div>
     </div>
     <div class="pane" data-p="http">
-      <div class="filters"><span class="pill">本页发出的每个请求，点开看请求和响应</span><button class="ghost" data-clear="http" style="margin-left:auto">清空</button></div>
+      <div class="filters"><span class="pill">本页发出的每个请求，点开看请求和响应；任意接口去「接口测试」</span><button class="ghost" data-clear="http" style="margin-left:auto">清空</button></div>
       <div class="log" id="http"></div>
-    </div>
-    <div class="pane" data-p="req">
-      <div class="req">
-        <div class="line">
-          <select id="rm"><option>GET</option><option>POST</option><option>DELETE</option></select>
-          <input id="rp" value="/api/state">
-        </div>
-        <textarea id="rb" placeholder='请求体 JSON，例如 {"text":"改成两天"}'></textarea>
-        <div class="quick" id="quick">
-          <button data-q="GET /api/state">state</button>
-          <button data-q="GET /api/chats">chats</button>
-          <button data-q="GET /api/auth/me">me</button>
-          <button data-q="GET /api/profile">profile</button>
-          <button data-q="GET /api/health">health</button>
-        </div>
-        <button id="rsend" class="primary">发送请求（带当前鉴权）</button>
-      </div>
-      <div class="log" id="rout"></div>
     </div>
   </div>
 </div>
@@ -306,7 +281,6 @@ section { background: var(--bg); }
       + `<pre>响应：${esc(typeof resp === 'string' ? resp : JSON.stringify(scrub(resp), null, 2))}</pre>`;
     $('http').prepend(d);
     $('nHttp').textContent = ++S.counts.http;
-    if (S.reqWatch && path === S.reqWatch) { const c = d.cloneNode(true); c.open = true; $('rout').prepend(c); S.reqWatch = null; }
   }
 
   // ---------- SSE：Cookie 模式用 EventSource；Bearer 模式用 fetch 读流（和 Swift 的 URLSession.bytes 一样） ----------
@@ -688,14 +662,11 @@ section { background: var(--bg); }
   };
   $('tasks').addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.dataset.steerIn) document.querySelector(`button[data-steer="${CSS.escape(e.target.dataset.steerIn)}"]`)?.click(); });
 
-  // ---------- 右侧标签、事件筛选、任意请求 ----------
+  // ---------- 右侧标签、事件筛选 ----------
   const setTab = (p) => { document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.p === p)); document.querySelectorAll('.pane').forEach((x) => x.classList.toggle('on', x.dataset.p === p)); };
   $('tabs').onclick = (e) => { const b = e.target.closest('button'); if (b) setTab(b.dataset.p); };
   document.querySelectorAll('[data-f]').forEach((c) => { c.onchange = () => document.querySelectorAll(`#events details[data-k="${c.dataset.f}"]`).forEach((d) => { d.hidden = !c.checked; }); });
   document.querySelectorAll('[data-clear]').forEach((b) => { b.onclick = () => { const k = b.dataset.clear; $(k).innerHTML = ''; S.counts[k] = 0; $(k === 'events' ? 'nEvents' : 'nHttp').textContent = ''; }; });
-  const fire = (m, p, body) => { S.reqWatch = p; api(m, p, body); };
-  $('rsend').onclick = () => { const b = $('rb').value.trim(); fire($('rm').value, $('rp').value.trim(), b || undefined); };
-  $('quick').onclick = (e) => { const b = e.target.closest('[data-q]'); if (!b) return; const [m, p] = b.dataset.q.split(' '); $('rm').value = m; $('rp').value = p; $('rb').value = ''; fire(m, p); };
 
   // ---------- 窄屏：三栏变成三个标签 ----------
   function setMobile(k) {

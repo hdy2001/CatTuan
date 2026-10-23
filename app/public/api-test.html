@@ -1,0 +1,504 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>喵团接口测试</title>
+<style>
+:root {
+  --bg: #f7f6f3; --panel: #ffffff; --ink: #1f1d1a; --mute: #6b665e; --line: #e4e0d8;
+  --soft: #f1eee8; --accent: #c2410c; --accent-ink: #ffffff;
+  --ok: #15803d; --warn: #b45309; --bad: #b91c1c; --info: #1d4ed8;
+  --get: #1d4ed8; --post: #15803d; --patch: #b45309; --del: #b91c1c;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #171614; --panel: #201f1c; --ink: #ece9e3; --mute: #a39d93; --line: #35322d;
+    --soft: #2a2824; --accent: #fb923c; --accent-ink: #1f1d1a;
+    --ok: #4ade80; --warn: #fbbf24; --bad: #f87171; --info: #93c5fd;
+    --get: #93c5fd; --post: #86efac; --patch: #fcd34d; --del: #fca5a5;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #171614; --panel: #201f1c; --ink: #ece9e3; --mute: #a39d93; --line: #35322d;
+  --soft: #2a2824; --accent: #fb923c; --accent-ink: #1f1d1a;
+  --ok: #4ade80; --warn: #fbbf24; --bad: #f87171; --info: #93c5fd;
+  --get: #93c5fd; --post: #86efac; --patch: #fcd34d; --del: #fca5a5;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.55 -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif; display: flex; flex-direction: column; }
+code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+button, input, select, textarea { font: inherit; color: var(--ink); }
+button { cursor: pointer; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 11px; }
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: .5; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+button.ghost { border-color: transparent; background: none; color: var(--mute); padding: 2px 6px; }
+input, select, textarea { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; }
+a { color: var(--accent); }
+
+/* 顶栏：和 Playground 一样 */
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+header h1 { font-size: 16px; margin: 0 6px 0 0; white-space: nowrap; }
+header nav { display: flex; gap: 4px; }
+header nav a { text-decoration: none; color: var(--mute); padding: 4px 10px; border-radius: 6px; }
+header nav a.on { background: var(--soft); color: var(--ink); font-weight: 600; }
+.auth { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-left: auto; }
+.auth input { width: 110px; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--mute); margin-right: 5px; vertical-align: 1px; }
+.dot.on { background: var(--ok); } .dot.wait { background: var(--warn); } .dot.off { background: var(--bad); }
+.pill { font-size: 12px; color: var(--mute); white-space: nowrap; }
+
+/* 三栏：接口列表 / 请求+响应 / 历史+SSE */
+.app { flex: 1; min-height: 0; display: grid; grid-template-columns: 240px minmax(0, 1fr) 360px; }
+aside, section, .side { min-height: 0; display: flex; flex-direction: column; }
+aside { border-right: 1px solid var(--line); background: var(--panel); }
+.side { border-left: 1px solid var(--line); background: var(--panel); }
+.bar { display: flex; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.bar b { flex: 1; font-size: 13px; }
+.scroll { flex: 1; overflow-y: auto; min-height: 0; }
+
+.m { display: inline-block; min-width: 50px; font-weight: 700; font-size: 11px; font-family: ui-monospace, Menlo, monospace; }
+.m.GET { color: var(--get); } .m.POST { color: var(--post); } .m.PATCH { color: var(--patch); } .m.DELETE { color: var(--del); }
+.grp { padding: 10px 12px 2px; font-size: 12px; color: var(--mute); font-weight: 600; }
+.ep { display: block; width: 100%; text-align: left; border: 0; border-radius: 0; background: none; padding: 6px 12px; }
+.ep:hover { background: var(--soft); }
+.ep.on { background: var(--soft); box-shadow: inset 3px 0 var(--accent); }
+.ep code { font-size: 12px; }
+.ep small { display: block; color: var(--mute); font-size: 11.5px; padding-left: 50px; }
+
+section { overflow-y: auto; padding: 16px 20px 28px; gap: 12px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
+.line { display: flex; gap: 6px; }
+.line input { flex: 1; min-width: 0; font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+.lbl { font-size: 12px; color: var(--mute); display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+textarea { width: 100%; resize: vertical; font-family: ui-monospace, Menlo, monospace; font-size: 12.5px; }
+#body { min-height: 120px; }
+#hdrs { min-height: 44px; }
+.ids { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; font-size: 12px; color: var(--mute); }
+.ids:empty { display: none; }
+.chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); cursor: pointer; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chip:hover { border-color: var(--accent); }
+.acts { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.acts .hint { color: var(--mute); font-size: 12px; margin-right: auto; }
+
+.resp-head { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.code { font-weight: 700; font-family: ui-monospace, Menlo, monospace; }
+.code.ok { color: var(--ok); } .code.bad { color: var(--bad); }
+.tabs { display: flex; gap: 2px; margin-left: auto; }
+.tabs button { border: 0; border-radius: 0; background: none; padding: 4px 8px; color: var(--mute); border-bottom: 2px solid transparent; }
+.tabs button.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+.out { margin: 0; white-space: pre-wrap; word-break: break-all; background: var(--soft); padding: 10px 12px; border-radius: 8px; max-height: 60vh; overflow: auto; }
+.out img { max-width: 100%; display: block; }
+.empty { color: var(--mute); text-align: center; padding: 24px 12px; }
+
+.side .tabs { margin: 0; border-bottom: 1px solid var(--line); }
+.side .tabs button { flex: 1; padding: 10px 4px; }
+.pane { display: none; flex: 1; min-height: 0; flex-direction: column; }
+.pane.on { display: flex; }
+.hist { display: flex; gap: 6px; align-items: baseline; padding: 8px 12px; border-bottom: 1px solid var(--line); cursor: pointer; font-size: 12px; }
+.hist:hover { background: var(--soft); }
+.hist .p { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Menlo, monospace; }
+.hist .tm { color: var(--mute); }
+.good { color: var(--ok); font-weight: 700; } .bad { color: var(--bad); font-weight: 700; }
+.filters { display: flex; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); flex-wrap: wrap; align-items: center; }
+.log { flex: 1; overflow-y: auto; min-height: 0; padding: 6px 10px; font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; }
+.log details { border-bottom: 1px solid var(--line); padding: 4px 0; }
+.log summary { cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; list-style: none; }
+.log summary::-webkit-details-marker { display: none; }
+.log .tm { color: var(--mute); margin-right: 6px; }
+.log .ty { color: var(--accent); font-weight: 700; margin-right: 6px; }
+.log pre { white-space: pre-wrap; word-break: break-all; background: var(--soft); padding: 6px 8px; border-radius: 6px; margin: 4px 0; max-height: 300px; overflow-y: auto; }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw; }
+.toast.on { opacity: .95; }
+.mobile-tabs { display: none; }
+
+@media (max-width: 1100px) {
+  .app { grid-template-columns: 210px minmax(0, 1fr) 300px; }
+}
+@media (max-width: 860px) {
+  .auth { margin-left: 0; width: 100%; }
+  .auth input { flex: 1; min-width: 0; width: auto; }
+  .mobile-tabs { display: flex; border-bottom: 1px solid var(--line); background: var(--panel); }
+  .mobile-tabs button { flex: 1; border: 0; border-radius: 0; background: none; padding: 9px; color: var(--mute); border-bottom: 2px solid transparent; }
+  .mobile-tabs button.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+  .app { display: flex; flex-direction: column; }
+  .app > * { display: none; flex: 1; border: 0; }
+  .app > .m-on { display: flex; }
+  section { padding: 12px 16px 24px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>🐱 喵团接口测试</h1>
+  <nav><a href="api.html">Playground</a><a class="on" href="api-test.html">接口测试</a><a href="api-docs.html">接口文档</a></nav>
+  <div class="auth">
+    <span class="pill" id="who">检查登录中…</span>
+    <select id="mode" title="鉴权方式">
+      <option value="cookie">Cookie（网页）</option>
+      <option value="bearer">Bearer token（原生 App）</option>
+    </select>
+    <input id="lname" placeholder="名字" autocomplete="username">
+    <input id="lpass" placeholder="密码" type="password" autocomplete="current-password">
+    <button id="blogin" class="primary">登录</button>
+    <button id="blogout">退出</button>
+  </div>
+</header>
+<div class="mobile-tabs" id="mtabs">
+  <button data-m="aside">接口</button>
+  <button data-m="section" class="on">请求</button>
+  <button data-m="side">历史 / SSE</button>
+</div>
+<div class="app">
+  <aside>
+    <div class="bar"><b>接口</b><span class="pill">点一下填进请求</span></div>
+    <div class="scroll" id="eps"></div>
+  </aside>
+  <section class="m-on">
+    <div class="card">
+      <div class="line">
+        <select id="rm"><option>GET</option><option>POST</option><option>PATCH</option><option>DELETE</option></select>
+        <input id="rp" value="/api/state" spellcheck="false">
+      </div>
+      <div class="ids" id="ids"></div>
+      <div class="lbl"><span>请求体（JSON，GET / DELETE 留空）</span><button class="ghost" id="fmt" type="button">格式化</button></div>
+      <textarea id="body" spellcheck="false" placeholder='{"text":"你好"}'></textarea>
+      <details>
+        <summary class="lbl" style="cursor:pointer;justify-content:flex-start">＋ 额外请求头（每行一个 Key: value，鉴权头会自动带）</summary>
+        <textarea id="hdrs" spellcheck="false" placeholder="X-Debug: 1"></textarea>
+      </details>
+      <div class="acts">
+        <span class="hint">⌘/Ctrl + Enter 发送 · 带当前鉴权</span>
+        <button id="curl" type="button">复制 curl</button>
+        <button id="send" class="primary">发送</button>
+      </div>
+    </div>
+    <div class="card" id="resp">
+      <div class="empty">发个请求，响应显示在这里</div>
+    </div>
+  </section>
+  <div class="side">
+    <div class="tabs" id="stabs">
+      <button data-p="hist" class="on">历史<span class="pill" id="nHist"></span></button>
+      <button data-p="sse">SSE<span class="pill" id="nSse"></span></button>
+    </div>
+    <div class="pane on" data-p="hist">
+      <div class="filters"><span class="pill">点一条重新载入请求和响应</span><button class="ghost" id="clearHist" style="margin-left:auto">清空</button></div>
+      <div class="scroll" id="hist"></div>
+    </div>
+    <div class="pane" data-p="sse">
+      <div class="filters">
+        <span class="pill"><span class="dot" id="sseDot"></span><span id="sseText">未连接</span></span>
+        <button id="sseBtn" style="margin-left:auto">连接 /api/events</button>
+        <button class="ghost" id="clearSse">清空</button>
+      </div>
+      <div class="log" id="sse"></div>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const hm = () => new Date().toLocaleTimeString('zh-CN', { hour12: false });
+  // 和 Playground 共用同一组 key：同一个标签页里来回切，登录状态不丢；token 关掉标签页就没了
+  const store = { get(k) { try { return sessionStorage.getItem(k); } catch { return null; } }, set(k, v) { try { v == null ? sessionStorage.removeItem(k) : sessionStorage.setItem(k, v); } catch {} } };
+  let toastT;
+  const toast = (t) => { $('toast').textContent = t; $('toast').classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => $('toast').classList.remove('on'), 2800); };
+
+  // 接口清单：和 app/server.mjs 的路由对应，说明见 api-docs.html
+  const EPS = [
+    ['登录', [
+      ['POST', '/api/auth/login', '登录（token:true 拿 Bearer token）', { name: '', password: '', token: true }],
+      ['GET', '/api/auth/me', '当前账号'],
+      ['POST', '/api/auth/logout', '退出，当前 token 作废'],
+      ['POST', '/api/auth/invite', '查看 / 激活邀请', { code: '' }],
+    ]],
+    ['聊天', [
+      ['GET', '/api/state', '全量状态'],
+      ['POST', '/api/message', '发消息，回复走 SSE', { text: '你好' }],
+      ['GET', '/api/chats', '聊天列表'],
+      ['GET', '/api/chats?q=', '搜索聊天'],
+      ['POST', '/api/chats', '新建聊天'],
+      ['POST', '/api/chats/:id/open', '切换聊天'],
+      ['DELETE', '/api/chats/:id', '删除聊天'],
+    ]],
+    ['后台任务', [
+      ['POST', '/api/tasks/:id/steer', '修改 / 插话', { text: '改成两天一夜' }],
+      ['POST', '/api/tasks/:id/stop', '停止'],
+      ['POST', '/api/tasks/:id/retry', '重试失败 / 停止的任务'],
+    ]],
+    ['目标', [
+      ['POST', '/api/goals', '新建目标', { text: '' }],
+      ['POST', '/api/goals/:id/run', '立刻检查一次'],
+      ['PATCH', '/api/goals/:id', '暂停 / 继续 / 标记完成', { enabled: false }],
+      ['DELETE', '/api/goals/:id', '删除目标'],
+    ]],
+    ['其他', [
+      ['GET', '/api/profile', '用量统计'],
+      ['GET', '/api/calls', '通话记录'],
+      ['GET', '/api/health', '健康检查（不用登录）'],
+    ]],
+  ];
+
+  const S = {
+    mode: store.get('pg.mode') || 'cookie', token: store.get('pg.token') || '', me: null,
+    ids: { chats: [], tasks: [], goals: [] }, hist: [], view: null, tab: 'body', sseN: 0,
+  };
+  $('mode').value = S.mode;
+
+  // ---------- 接口列表 ----------
+  $('eps').innerHTML = EPS.map(([g, list]) => `<div class="grp">${esc(g)}</div>` + list.map(([m, p, d], i) =>
+    `<button class="ep" data-ep="${esc(g)}|${i}"><span class="m ${m}">${m}</span><code>${esc(p)}</code><small>${esc(d)}</small></button>`).join('')).join('');
+  $('eps').onclick = (e) => {
+    const b = e.target.closest('[data-ep]'); if (!b) return;
+    const [g, i] = b.dataset.ep.split('|');
+    const [m, p, , body] = EPS.find((x) => x[0] === g)[1][+i];
+    $('rm').value = m; $('rp').value = p; $('body').value = body ? JSON.stringify(body, null, 2) : '';
+    document.querySelectorAll('.ep').forEach((x) => x.classList.toggle('on', x === b));
+    renderIds(); setMobile('section');
+    if (p.endsWith('?q=')) { $('rp').focus(); $('rp').setSelectionRange(p.length, p.length); }
+  };
+
+  // ---------- 路径里的 :id：从之前的响应里收集候选 ----------
+  function collectIds(data) {
+    if (!data || typeof data !== 'object') return;
+    const take = (k, arr, label) => { if (Array.isArray(arr) && arr.length) S.ids[k] = arr.filter((x) => x?.id).slice(0, 12).map((x) => ({ id: x.id, label: label(x) })); };
+    take('chats', data.chats, (c) => c.title);
+    take('tasks', data.tasks, (t) => `${t.title} · ${t.status}`);
+    take('goals', data.goals, (g) => g.title || g.text || '');
+    if (data.chat?.id && !S.ids.chats.some((c) => c.id === data.chat.id)) S.ids.chats.unshift({ id: data.chat.id, label: data.chat.title });
+  }
+  function renderIds() {
+    const p = $('rp').value;
+    if (!p.includes(':id')) { $('ids').innerHTML = ''; return; }
+    const k = p.startsWith('/api/chats') ? 'chats' : p.startsWith('/api/tasks') ? 'tasks' : p.startsWith('/api/goals') ? 'goals' : null;
+    const list = k ? S.ids[k] : [];
+    $('ids').innerHTML = list.length
+      ? `<span>换掉 :id →</span>${list.map((x) => `<span class="chip" data-id="${esc(x.id)}" title="${esc(x.id)}">${esc(x.label || x.id)}</span>`).join('')}`
+      : '<span>路径里的 :id 要换成真实 id：先调一次 GET /api/state，这里会列出可选的</span>';
+  }
+  $('ids').onclick = (e) => { const c = e.target.closest('[data-id]'); if (c) { $('rp').value = $('rp').value.replace(':id', c.dataset.id); renderIds(); } };
+  $('rp').addEventListener('input', renderIds);
+
+  // ---------- 发请求 ----------
+  function parseHeaders() {
+    const h = {};
+    for (const l of $('hdrs').value.split('\n')) { const i = l.indexOf(':'); if (i > 0) h[l.slice(0, i).trim()] = l.slice(i + 1).trim(); }
+    return h;
+  }
+  function buildInit(method, body) {
+    const init = { method, headers: parseHeaders(), credentials: S.mode === 'bearer' ? 'omit' : 'same-origin' };
+    if (S.mode === 'bearer' && S.token) init.headers.Authorization = `Bearer ${S.token}`;
+    if (body) { init.headers['Content-Type'] ??= 'application/json'; init.body = body; }
+    return init;
+  }
+  // 日志和历史里不露密码和完整 token
+  const scrubText = (t) => String(t ?? '').replace(/("password"\s*:\s*")[^"]*"/g, '$1******"').replace(/("token"\s*:\s*")([^"]{6})[^"]*"/g, '$1$2…"');
+
+  async function call(method, path, body) {
+    const init = buildInit(method, body);
+    const t0 = performance.now();
+    const rec = { at: hm(), method, path, body: scrubText(body), status: 0, ms: 0, size: 0, headers: [], text: '', type: '', blob: null };
+    try {
+      const res = await fetch(path, init);
+      rec.status = res.status; rec.headers = [...res.headers]; rec.type = res.headers.get('content-type') || '';
+      if (rec.type.startsWith('image/')) { const b = await res.blob(); rec.size = b.size; rec.blob = URL.createObjectURL(b); }
+      else if (rec.type.startsWith('text/event-stream')) { rec.text = '（这是 SSE 流，到右侧「SSE」里连接）'; res.body?.cancel(); }
+      else { rec.text = await res.text(); rec.size = new Blob([rec.text]).size; }
+    } catch (e) { rec.text = `请求失败：${e.message}`; }
+    rec.ms = Math.round(performance.now() - t0);
+    let data = null; try { data = JSON.parse(rec.text); } catch {}
+    rec.json = data;
+    if (rec.status === 200 && data) {
+      collectIds(data);
+      if (path === '/api/auth/login' || path === '/api/auth/invite') onLogin(data);
+      if (path === '/api/auth/me') { S.me = data; showWho(); }
+    }
+    if (rec.status === 401 && path !== '/api/auth/login') { S.me = null; showWho(); }
+    if (path === '/api/auth/logout' && rec.status === 200) clearLogin();
+    rec.text = scrubText(rec.text);
+    S.hist.unshift(rec); if (S.hist.length > 100) S.hist.pop();
+    renderHist(); renderIds();
+    return rec;
+  }
+
+  $('send').onclick = async () => {
+    const method = $('rm').value, path = $('rp').value.trim();
+    if (!path.startsWith('/')) return toast('路径要以 / 开头，例如 /api/state');
+    if (path.includes(':id')) return toast('路径里的 :id 还没换成真实 id');
+    let body = $('body').value.trim();
+    if (body && (method === 'GET' || method === 'DELETE')) return toast(`${method} 不带请求体，先清空`);
+    if (body) { try { JSON.parse(body); } catch (e) { return toast(`请求体不是合法 JSON：${e.message}`); } }
+    $('send').disabled = true;
+    const rec = await call(method, path, body || undefined);
+    $('send').disabled = false;
+    showResp(rec);
+  };
+  document.addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); $('send').click(); } });
+  $('fmt').onclick = () => { const b = $('body').value.trim(); if (!b) return; try { $('body').value = JSON.stringify(JSON.parse(b), null, 2); } catch (e) { toast(`不是合法 JSON：${e.message}`); } };
+
+  $('curl').onclick = () => {
+    const method = $('rm').value, path = $('rp').value.trim(), body = $('body').value.trim();
+    const q = (s) => `'${s.replace(/'/g, `'\\''`)}'`;
+    const parts = [`curl -sS -X ${method} ${q(location.origin + path)}`];
+    if (S.mode === 'bearer') parts.push(`-H ${q(`Authorization: Bearer ${S.token || '<token>'}`)}`);
+    else parts.push(`-H ${q('Cookie: <从浏览器复制 cookie>')}`);
+    for (const [k, v] of Object.entries(parseHeaders())) parts.push(`-H ${q(`${k}: ${v}`)}`);
+    if (body) parts.push(`-H 'Content-Type: application/json'`, `-d ${q(JSON.stringify(JSON.parse(body)))}`);
+    navigator.clipboard?.writeText(parts.join(' \\\n  ')).then(() => toast(S.mode === 'bearer' ? '已复制（含完整 token，注意别外传）' : '已复制（Cookie 要自己替换）'), () => toast('复制失败'));
+  };
+
+  // ---------- 响应 ----------
+  function showResp(rec) {
+    S.view = rec;
+    const ok = rec.status >= 200 && rec.status < 300;
+    const size = rec.size > 1024 ? `${(rec.size / 1024).toFixed(1)} KB` : `${rec.size} B`;
+    const body = rec.blob ? `<img src="${rec.blob}" alt="">`
+      : esc(rec.json !== null && rec.json !== undefined ? JSON.stringify(JSON.parse(rec.text), null, 2) : rec.text || '（空）');
+    $('resp').innerHTML = `<div class="resp-head">
+        <span class="code ${ok ? 'ok' : 'bad'}">${rec.status || 'ERR'}</span>
+        <span class="mono"><span class="m ${esc(rec.method)}">${esc(rec.method)}</span>${esc(rec.path)}</span>
+        <span class="pill">${rec.ms} ms · ${size}</span>
+        <div class="tabs" id="rtabs"><button data-t="body">响应体</button><button data-t="headers">响应头</button>${rec.body ? '<button data-t="req">请求体</button>' : ''}<button class="ghost" id="copyResp" title="复制响应体">复制</button></div>
+      </div>
+      <pre class="out" data-t="body">${body}</pre>
+      <pre class="out" data-t="headers">${esc(rec.headers.map(([k, v]) => `${k}: ${v}`).join('\n') || '（无）')}</pre>
+      ${rec.body ? `<pre class="out" data-t="req">${esc(rec.body)}</pre>` : ''}`;
+    setRespTab(rec.body || S.tab !== 'req' ? S.tab : 'body');
+  }
+  function setRespTab(t) {
+    S.tab = t;
+    document.querySelectorAll('#rtabs [data-t]').forEach((b) => b.classList.toggle('on', b.dataset.t === t));
+    document.querySelectorAll('#resp .out').forEach((p) => { p.hidden = p.dataset.t !== t; });
+  }
+  $('resp').onclick = (e) => {
+    const b = e.target.closest('[data-t]'); if (b && b.tagName === 'BUTTON') return setRespTab(b.dataset.t);
+    if (e.target.id === 'copyResp' && S.view) navigator.clipboard?.writeText(S.view.text).then(() => toast('已复制响应体'), () => {});
+  };
+
+  // ---------- 历史 ----------
+  function renderHist() {
+    $('nHist').textContent = S.hist.length ? ` ${S.hist.length}` : '';
+    $('hist').innerHTML = S.hist.map((r, i) => `<div class="hist" data-h="${i}"><span class="tm">${r.at}</span><span class="${r.status >= 200 && r.status < 300 ? 'good' : 'bad'}">${r.status || 'ERR'}</span><span class="m ${esc(r.method)}">${esc(r.method)}</span><span class="p">${esc(r.path)}</span><span class="tm">${r.ms}ms</span></div>`).join('')
+      || '<div class="empty">还没有请求</div>';
+  }
+  $('hist').onclick = (e) => {
+    const h = e.target.closest('[data-h]'); if (!h) return;
+    const r = S.hist[+h.dataset.h];
+    $('rm').value = r.method; $('rp').value = r.path; $('body').value = (r.body || '').replace('"******"', '""');
+    if (r.body?.includes('******')) toast('密码没有存进历史，重新填一下');
+    renderIds(); showResp(r); setMobile('section');
+  };
+  $('clearHist').onclick = () => { S.hist.forEach((r) => r.blob && URL.revokeObjectURL(r.blob)); S.hist = []; renderHist(); };
+
+  // ---------- SSE：只看原始事件，不做业务处理 ----------
+  let es = null, ctl = null;
+  const sseState = (kind, text) => { $('sseDot').className = `dot ${kind}`; $('sseText').textContent = text; $('sseBtn').textContent = kind ? '断开' : '连接 /api/events'; };
+  function sseLog(raw) {
+    let ev = null; try { ev = JSON.parse(raw); } catch {}
+    if (ev?.type === 'browser-frame') return; // 浏览器实时画面太多，不记
+    const d = document.createElement('details');
+    d.innerHTML = `<summary><span class="tm">${hm()}</span><span class="ty">${esc(ev?.type || '?')}</span>${esc(raw.slice(0, 120))}</summary><pre>${esc(ev ? JSON.stringify(ev, null, 2) : raw)}</pre>`;
+    $('sse').prepend(d);
+    $('nSse').textContent = ` ${++S.sseN}`;
+  }
+  function closeSse(text = '未连接') { es?.close(); es = null; ctl?.abort(); ctl = null; sseState('', text); }
+  function openSse() {
+    closeSse();
+    sseState('wait', '连接中…');
+    if (S.mode === 'cookie') {
+      es = new EventSource('/api/events');
+      es.onopen = () => sseState('on', '已连接（Cookie）');
+      es.onmessage = (e) => sseLog(e.data);
+      es.onerror = () => closeSse('断开了（可能未登录），手动重连'); // 不自动重连，方便观察断线
+      return;
+    }
+    ctl = new AbortController();
+    const mine = ctl;
+    (async () => {
+      try {
+        const res = await fetch('/api/events', { headers: { Authorization: `Bearer ${S.token}` }, credentials: 'omit', signal: mine.signal });
+        if (!res.ok) { closeSse(`HTTP ${res.status}`); return; }
+        sseState('on', '已连接（Bearer）');
+        const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let i;
+          while ((i = buf.indexOf('\n\n')) >= 0) {
+            const block = buf.slice(0, i); buf = buf.slice(i + 2);
+            const data = block.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim()).join('');
+            if (data) sseLog(data);
+          }
+        }
+        if (ctl === mine) closeSse('服务端关闭了连接');
+      } catch (e) { if (e.name !== 'AbortError' && ctl === mine) closeSse(`断开：${e.message}`); }
+    })();
+  }
+  $('sseBtn').onclick = () => (es || ctl ? closeSse() : openSse());
+  $('clearSse').onclick = () => { $('sse').innerHTML = ''; S.sseN = 0; $('nSse').textContent = ''; };
+
+  // ---------- 登录 ----------
+  function showWho() {
+    const m = S.mode === 'bearer' ? 'Bearer' : 'Cookie';
+    $('who').textContent = S.me ? `${S.me.name}（${S.me.role || '?'}）· ${m}` : `未登录 · ${m}`;
+    $('who').style.color = S.me ? 'var(--ok)' : '';
+    for (const id of ['lname', 'lpass', 'blogin']) $(id).hidden = !!S.me;
+    $('blogout').hidden = !S.me;
+  }
+  // 不管是顶栏登录，还是在请求框里手动调 /api/auth/login，拿到 token 都存起来
+  function onLogin(data) {
+    if (!data?.ok) return;
+    if (S.mode === 'bearer') {
+      if (!data.token) { toast('响应里没有 token：Bearer 模式登录要带 "token": true'); return; }
+      S.token = data.token; store.set('pg.token', S.token);
+    }
+    S.me = { name: data.name, role: data.role }; showWho();
+    call('GET', '/api/auth/me');
+  }
+  function clearLogin() { S.me = null; S.token = ''; store.set('pg.token', null); closeSse(); showWho(); }
+  async function boot() {
+    showWho();
+    if (S.mode === 'bearer' && !S.token) return;
+    const r = await call('GET', '/api/auth/me');
+    if (r.status === 200) call('GET', '/api/state'); // 顺便收集 :id 候选
+  }
+  $('blogin').onclick = async () => {
+    const name = $('lname').value.trim(), password = $('lpass').value;
+    if (!name || !password) return toast('填一下名字和密码');
+    const r = await call('POST', '/api/auth/login', JSON.stringify({ name, password, ...(S.mode === 'bearer' && { token: true }) }));
+    if (r.status !== 200) return toast(`${r.status}：${r.json?.error || '登录失败'}`);
+    $('lpass').value = '';
+    call('GET', '/api/state');
+  };
+  $('lpass').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('blogin').click(); });
+  $('blogout').onclick = async () => { await call('POST', '/api/auth/logout'); clearLogin(); };
+  $('mode').onchange = () => {
+    S.mode = $('mode').value; store.set('pg.mode', S.mode);
+    S.me = null; closeSse();
+    toast(S.mode === 'bearer' ? 'Bearer 模式：请求只带 Authorization 头，不带 cookie' : 'Cookie 模式：浏览器自动带 cookie');
+    boot();
+  };
+
+  // ---------- 右侧标签、窄屏 ----------
+  $('stabs').onclick = (e) => {
+    const b = e.target.closest('[data-p]'); if (!b) return;
+    document.querySelectorAll('#stabs [data-p]').forEach((x) => x.classList.toggle('on', x === b));
+    document.querySelectorAll('.side .pane').forEach((x) => x.classList.toggle('on', x.dataset.p === b.dataset.p));
+  };
+  function setMobile(k) {
+    document.querySelectorAll('#mtabs button').forEach((b) => b.classList.toggle('on', b.dataset.m === k));
+    document.querySelectorAll('.app > *').forEach((x) => x.classList.toggle('m-on', x.matches(k === 'side' ? '.side' : k)));
+  }
+  $('mtabs').onclick = (e) => { const b = e.target.closest('button'); if (b) setMobile(b.dataset.m); };
+
+  renderHist(); renderIds(); boot();
+})();
+</script>
+</body>
+</html>
