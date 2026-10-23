@@ -1,0 +1,711 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>喵团 Playground</title>
+<style>
+:root {
+  --bg: #f7f6f3; --panel: #ffffff; --ink: #1f1d1a; --mute: #6b665e; --line: #e4e0d8;
+  --soft: #f1eee8; --accent: #c2410c; --accent-ink: #ffffff; --me: #c2410c; --me-ink: #ffffff;
+  --ok: #15803d; --warn: #b45309; --bad: #b91c1c; --info: #1d4ed8;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #171614; --panel: #201f1c; --ink: #ece9e3; --mute: #a39d93; --line: #35322d;
+    --soft: #2a2824; --accent: #fb923c; --accent-ink: #1f1d1a; --me: #9a3412; --me-ink: #fff7ed;
+    --ok: #4ade80; --warn: #fbbf24; --bad: #f87171; --info: #93c5fd;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #171614; --panel: #201f1c; --ink: #ece9e3; --mute: #a39d93; --line: #35322d;
+  --soft: #2a2824; --accent: #fb923c; --accent-ink: #1f1d1a; --me: #9a3412; --me-ink: #fff7ed;
+  --ok: #4ade80; --warn: #fbbf24; --bad: #f87171; --info: #93c5fd;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.55 -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif; display: flex; flex-direction: column; }
+code, pre, .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+button, input, select, textarea { font: inherit; color: var(--ink); }
+button { cursor: pointer; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 5px 11px; }
+button:hover:not(:disabled) { border-color: var(--accent); }
+button:disabled { opacity: .5; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+button.ghost { border-color: transparent; background: none; color: var(--mute); padding: 2px 6px; }
+button.ghost:hover { color: var(--bad); }
+input, select, textarea { background: var(--bg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 9px; }
+a { color: var(--accent); }
+
+/* 顶栏 */
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+header h1 { font-size: 16px; margin: 0 6px 0 0; white-space: nowrap; }
+header nav { display: flex; gap: 4px; }
+header nav a { text-decoration: none; color: var(--mute); padding: 4px 10px; border-radius: 6px; }
+header nav a.on { background: var(--soft); color: var(--ink); font-weight: 600; }
+.auth { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-left: auto; }
+.auth input { width: 110px; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--mute); margin-right: 5px; vertical-align: 1px; }
+.dot.on { background: var(--ok); } .dot.wait { background: var(--warn); } .dot.off { background: var(--bad); }
+.pill { font-size: 12px; color: var(--mute); white-space: nowrap; }
+
+/* 三栏 */
+.app { flex: 1; min-height: 0; display: grid; grid-template-columns: 220px minmax(0, 1fr) 380px; }
+aside, section, .side { min-height: 0; display: flex; flex-direction: column; }
+aside { border-right: 1px solid var(--line); background: var(--panel); }
+.side { border-left: 1px solid var(--line); background: var(--panel); }
+.bar { display: flex; align-items: center; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.bar b { flex: 1; font-size: 13px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.scroll { flex: 1; overflow-y: auto; min-height: 0; }
+
+/* 聊天列表 */
+.chat-item { display: flex; gap: 4px; align-items: flex-start; padding: 9px 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
+.chat-item:hover { background: var(--soft); }
+.chat-item.on { background: var(--soft); box-shadow: inset 3px 0 var(--accent); }
+.chat-item .t { flex: 1; min-width: 0; }
+.chat-item .title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.chat-item .pv { color: var(--mute); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* 聊天窗 */
+section { background: var(--bg); }
+.msgs { flex: 1; overflow-y: auto; min-height: 0; padding: 18px 20px 8px; display: flex; flex-direction: column; gap: 10px; }
+.empty { margin: auto; color: var(--mute); text-align: center; }
+.row { display: flex; flex-direction: column; align-items: flex-start; max-width: 100%; }
+.row.me { align-items: flex-end; }
+.bubble { max-width: min(640px, 86%); padding: 9px 13px; border-radius: 14px; background: var(--panel); border: 1px solid var(--line); white-space: pre-wrap; word-break: break-word; }
+.row.me .bubble { background: var(--me); color: var(--me-ink); border-color: var(--me); }
+.row.me .bubble a { color: inherit; }
+.row.pending .bubble { opacity: .6; }
+.meta { font-size: 11px; color: var(--mute); margin: 3px 6px 0; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.meta .id { cursor: pointer; } .meta .id:hover { color: var(--accent); }
+.chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding: 1px 8px; border-radius: 99px; border: 1px solid var(--line); background: var(--panel); color: var(--mute); cursor: pointer; }
+.chip:hover { border-color: var(--accent); }
+.st-queued { color: var(--mute); } .st-running { color: var(--info); } .st-done { color: var(--ok); } .st-failed { color: var(--bad); } .st-stopped { color: var(--warn); }
+.imgs { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.imgs img { width: 120px; height: 120px; object-fit: cover; border-radius: 8px; border: 1px solid var(--line); background: var(--soft); }
+.card { max-width: min(640px, 86%); width: 100%; margin-top: 6px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.card .hd { padding: 8px 12px; font-weight: 600; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.card .bd { padding: 10px 12px; white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow-y: auto; }
+.card.open .bd { max-height: none; }
+.card .src { padding: 6px 12px 10px; font-size: 12px; }
+.card .src a { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ask { padding: 10px 12px; display: flex; flex-direction: column; gap: 10px; }
+.ask .q b { display: block; margin-bottom: 5px; }
+.ask .opts { display: flex; flex-wrap: wrap; gap: 6px; }
+.ask .opts button.sel { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.ask .opts small { color: var(--mute); margin-left: 4px; }
+.typing { align-self: flex-start; color: var(--mute); font-size: 13px; padding: 6px 12px; background: var(--panel); border: 1px dashed var(--line); border-radius: 14px; margin-top: 10px; }
+.typing::before { content: "● ● ●"; letter-spacing: 2px; margin-right: 8px; animation: blink 1.2s infinite; }
+@keyframes blink { 50% { opacity: .3; } }
+@media (prefers-reduced-motion: reduce) { .typing::before { animation: none; } }
+
+/* 输入框 */
+.composer { border-top: 1px solid var(--line); background: var(--panel); padding: 10px 14px 12px; }
+.composer textarea { width: 100%; resize: none; min-height: 44px; max-height: 160px; border-radius: 10px; padding: 9px 11px; display: block; }
+.composer .tools { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.composer .hint { color: var(--mute); font-size: 12px; margin-right: auto; }
+.thumbs { display: flex; gap: 6px; flex-wrap: wrap; }
+.thumbs:not(:empty) { margin-bottom: 8px; }
+.thumbs span { position: relative; }
+.thumbs img { width: 52px; height: 52px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); }
+.thumbs button { position: absolute; top: -6px; right: -6px; width: 18px; height: 18px; padding: 0; border-radius: 50%; font-size: 11px; line-height: 1; }
+.asking { font-size: 12px; color: var(--accent); }
+
+/* 右侧面板 */
+.tabs { display: flex; border-bottom: 1px solid var(--line); }
+.tabs button { flex: 1; border: 0; border-radius: 0; background: none; padding: 10px 4px; color: var(--mute); border-bottom: 2px solid transparent; }
+.tabs button.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+.tabs .n { font-size: 11px; color: var(--mute); margin-left: 3px; }
+.pane { display: none; flex: 1; min-height: 0; flex-direction: column; }
+.pane.on { display: flex; }
+.task { border-bottom: 1px solid var(--line); padding: 10px 12px; }
+.task.focus { background: var(--soft); }
+.task .top { display: flex; gap: 8px; align-items: baseline; }
+.task .top b { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task .sub { font-size: 12px; color: var(--mute); margin-top: 2px; }
+.task .steps { margin: 6px 0 0; padding-left: 16px; font-size: 12px; color: var(--mute); }
+.task .acts { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+.task .acts input { flex: 1; min-width: 120px; }
+.task details { margin-top: 6px; font-size: 12px; }
+.task details pre { white-space: pre-wrap; word-break: break-word; max-height: 220px; overflow-y: auto; background: var(--soft); padding: 8px; border-radius: 6px; margin: 4px 0 0; }
+.log { flex: 1; overflow-y: auto; min-height: 0; padding: 6px 10px; font-family: ui-monospace, Menlo, monospace; font-size: 11.5px; }
+.log details { border-bottom: 1px solid var(--line); padding: 4px 0; }
+.log summary { cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; list-style: none; }
+.log summary::-webkit-details-marker { display: none; }
+.log .tm { color: var(--mute); margin-right: 6px; }
+.log .ty { color: var(--accent); font-weight: 700; margin-right: 6px; }
+.log .bad { color: var(--bad); font-weight: 700; margin-right: 6px; }
+.log .good { color: var(--ok); font-weight: 700; margin-right: 6px; }
+.log pre { white-space: pre-wrap; word-break: break-all; background: var(--soft); padding: 6px 8px; border-radius: 6px; margin: 4px 0; max-height: 300px; overflow-y: auto; }
+.filters { display: flex; gap: 6px; padding: 8px 10px; border-bottom: 1px solid var(--line); flex-wrap: wrap; align-items: center; }
+.filters label { font-size: 12px; color: var(--mute); display: flex; gap: 3px; align-items: center; }
+.req { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; border-bottom: 1px solid var(--line); }
+.req .line { display: flex; gap: 6px; }
+.req .line input { flex: 1; min-width: 0; }
+.req textarea { min-height: 70px; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+.req .quick { display: flex; gap: 5px; flex-wrap: wrap; }
+.req .quick button { font-size: 12px; padding: 3px 8px; }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); background: var(--ink); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px; opacity: 0; transition: opacity .2s; pointer-events: none; max-width: 90vw; }
+.toast.on { opacity: .95; }
+.mobile-tabs { display: none; }
+
+@media (max-width: 1100px) {
+  .app { grid-template-columns: 200px minmax(0, 1fr) 320px; }
+}
+@media (max-width: 860px) {
+  .auth { margin-left: 0; width: 100%; }
+  .auth input { flex: 1; min-width: 0; width: auto; }
+  .mobile-tabs { display: flex; border-bottom: 1px solid var(--line); background: var(--panel); }
+  .mobile-tabs button { flex: 1; border: 0; border-radius: 0; background: none; padding: 9px; color: var(--mute); border-bottom: 2px solid transparent; }
+  .mobile-tabs button.on { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+  .app { display: flex; flex-direction: column; }
+  .app > * { display: none; flex: 1; border: 0; }
+  .app > .m-on { display: flex; }
+  .msgs { padding: 14px 16px 8px; }
+  .bubble, .card { max-width: 92%; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>🐱 喵团 Playground</h1>
+  <nav><a class="on" href="api.html">Playground</a><a href="api-docs.html">接口文档</a></nav>
+  <div class="auth">
+    <span class="pill"><span class="dot" id="sseDot"></span><span id="sseText">SSE 未连接</span></span>
+    <span class="pill" id="who">检查登录中…</span>
+    <select id="mode" title="鉴权方式">
+      <option value="cookie">Cookie（网页）</option>
+      <option value="bearer">Bearer token（原生 App）</option>
+    </select>
+    <input id="lname" placeholder="名字" autocomplete="username">
+    <input id="lpass" placeholder="密码" type="password" autocomplete="current-password">
+    <button id="blogin" class="primary">登录</button>
+    <button id="blogout">退出</button>
+  </div>
+</header>
+<div class="mobile-tabs" id="mtabs">
+  <button data-m="aside">聊天列表</button>
+  <button data-m="section" class="on">对话</button>
+  <button data-m="side">调试</button>
+</div>
+<div class="app">
+  <aside>
+    <div class="bar"><b>聊天</b><button id="newChat" title="POST /api/chats">＋ 新聊天</button></div>
+    <div style="padding:8px 12px;border-bottom:1px solid var(--line)"><input id="chatQ" placeholder="搜索聊天（GET /api/chats?q=）" style="width:100%"></div>
+    <div class="scroll" id="chats"></div>
+  </aside>
+  <section class="m-on">
+    <div class="bar"><b id="chatTitle">—</b><span class="pill" id="chatId"></span><button id="reload" title="GET /api/state">刷新</button></div>
+    <div class="msgs" id="msgs"><div class="empty">登录后这里显示当前聊天</div></div>
+    <div class="composer">
+      <div class="thumbs" id="thumbs"></div>
+      <textarea id="input" rows="1" placeholder="和喵团说点什么…（Enter 发送，Shift+Enter 换行）"></textarea>
+      <div class="tools">
+        <span class="hint" id="hint">POST /api/message · 回复从 SSE 推回来</span>
+        <span class="asking" id="asking"></span>
+        <input type="file" id="file" accept="image/*" multiple hidden>
+        <button id="pick" type="button">图片</button>
+        <button id="send" class="primary">发送</button>
+      </div>
+    </div>
+  </section>
+  <div class="side">
+    <div class="tabs" id="tabs">
+      <button data-p="tasks" class="on">任务<span class="n" id="nTasks"></span></button>
+      <button data-p="events">SSE 事件<span class="n" id="nEvents"></span></button>
+      <button data-p="http">HTTP<span class="n" id="nHttp"></span></button>
+      <button data-p="req">发请求</button>
+    </div>
+    <div class="pane on" data-p="tasks"><div class="scroll" id="tasks"></div></div>
+    <div class="pane" data-p="events">
+      <div class="filters">
+        <label><input type="checkbox" data-f="message" checked>message</label>
+        <label><input type="checkbox" data-f="task" checked>task</label>
+        <label><input type="checkbox" data-f="activity" checked>activity</label>
+        <label><input type="checkbox" data-f="other" checked>其他</label>
+        <button class="ghost" data-clear="events" style="margin-left:auto">清空</button>
+      </div>
+      <div class="log" id="events"></div>
+    </div>
+    <div class="pane" data-p="http">
+      <div class="filters"><span class="pill">本页发出的每个请求，点开看请求和响应</span><button class="ghost" data-clear="http" style="margin-left:auto">清空</button></div>
+      <div class="log" id="http"></div>
+    </div>
+    <div class="pane" data-p="req">
+      <div class="req">
+        <div class="line">
+          <select id="rm"><option>GET</option><option>POST</option><option>DELETE</option></select>
+          <input id="rp" value="/api/state">
+        </div>
+        <textarea id="rb" placeholder='请求体 JSON，例如 {"text":"改成两天"}'></textarea>
+        <div class="quick" id="quick">
+          <button data-q="GET /api/state">state</button>
+          <button data-q="GET /api/chats">chats</button>
+          <button data-q="GET /api/auth/me">me</button>
+          <button data-q="GET /api/profile">profile</button>
+          <button data-q="GET /api/health">health</button>
+        </div>
+        <button id="rsend" class="primary">发送请求（带当前鉴权）</button>
+      </div>
+      <div class="log" id="rout"></div>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const hm = (iso) => (iso ? new Date(iso) : new Date()).toLocaleTimeString('zh-CN', { hour12: false });
+  // token 只放 sessionStorage：关掉标签页就没了
+  const store = { get(k) { try { return sessionStorage.getItem(k); } catch { return null; } }, set(k, v) { try { v == null ? sessionStorage.removeItem(k) : sessionStorage.setItem(k, v); } catch {} } };
+  const STATUS = { queued: '排队中', running: '进行中', done: '已完成', failed: '失败', stopped: '已停止' };
+  let toastT;
+  const toast = (t) => { $('toast').textContent = t; $('toast').classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => $('toast').classList.remove('on'), 2800); };
+
+  // ---------- 状态 ----------
+  const S = {
+    mode: store.get('pg.mode') || 'cookie', token: store.get('pg.token') || '',
+    me: null, currentChat: null, chats: [], messages: new Map(), tasks: new Map(), activity: new Map(),
+    pending: [], images: [], ask: null, focusTask: null, counts: { events: 0, http: 0 },
+  };
+  $('mode').value = S.mode;
+
+  // ---------- HTTP：Cookie 模式靠浏览器带 cookie；Bearer 模式不带 cookie，只带 Authorization ----------
+  async function api(method, path, body, { quiet = false } = {}) {
+    const init = { method, headers: {}, credentials: S.mode === 'bearer' ? 'omit' : 'same-origin' };
+    if (S.mode === 'bearer' && S.token) init.headers.Authorization = `Bearer ${S.token}`;
+    if (body !== undefined) { init.headers['Content-Type'] = 'application/json'; init.body = typeof body === 'string' ? body : JSON.stringify(body); }
+    const t0 = performance.now();
+    let res, data = null;
+    try {
+      res = await fetch(path, init);
+      const text = await res.text();
+      try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+    } catch (e) {
+      logHttp(method, path, 0, Math.round(performance.now() - t0), body, e.message);
+      if (!quiet) toast(`请求失败：${e.message}`);
+      return { status: 0, data: null };
+    }
+    logHttp(method, path, res.status, Math.round(performance.now() - t0), body, data);
+    if (res.status === 401 && path !== '/api/auth/login') onLoggedOut();
+    else if (!res.ok && !quiet && data?.error) toast(`${res.status}：${data.error}`);
+    return { status: res.status, data };
+  }
+
+  // 日志里不露密码、token，图片只留个长度
+  const scrub = (o) => JSON.parse(JSON.stringify(o ?? null, (k, v) => (k === 'password' ? '******'
+    : k === 'token' && typeof v === 'string' ? `${v.slice(0, 6)}…`
+    : typeof v === 'string' && v.startsWith('data:image') ? `${v.slice(0, 30)}…(${Math.round(v.length / 1024)}KB)` : v)));
+  const parseMaybe = (b) => { if (typeof b !== 'string') return b; try { return JSON.parse(b); } catch { return b; } };
+
+  function logHttp(method, path, status, ms, body, resp) {
+    const ok = status >= 200 && status < 300;
+    const d = document.createElement('details');
+    d.innerHTML = `<summary><span class="tm">${hm()}</span><span class="${ok ? 'good' : 'bad'}">${status || 'ERR'}</span>${esc(method)} ${esc(path)} <span class="tm">${ms}ms</span></summary>`
+      + (body !== undefined ? `<pre>请求：${esc(JSON.stringify(scrub(parseMaybe(body)), null, 2))}</pre>` : '')
+      + `<pre>响应：${esc(typeof resp === 'string' ? resp : JSON.stringify(scrub(resp), null, 2))}</pre>`;
+    $('http').prepend(d);
+    $('nHttp').textContent = ++S.counts.http;
+    if (S.reqWatch && path === S.reqWatch) { const c = d.cloneNode(true); c.open = true; $('rout').prepend(c); S.reqWatch = null; }
+  }
+
+  // ---------- SSE：Cookie 模式用 EventSource；Bearer 模式用 fetch 读流（和 Swift 的 URLSession.bytes 一样） ----------
+  let es = null, ctl = null, retryT = null, retryMs = 1000, sseGen = 0;
+  const sseState = (kind, text) => { $('sseDot').className = `dot ${kind}`; $('sseText').textContent = text; };
+  function closeSse() { sseGen++; clearTimeout(retryT); es?.close(); es = null; ctl?.abort(); ctl = null; sseState('', 'SSE 未连接'); }
+  function openSse() {
+    closeSse();
+    const gen = sseGen;
+    sseState('wait', 'SSE 连接中…');
+    const opened = () => { if (gen !== sseGen) return; sseState('on', 'SSE 已连接'); retryMs = 1000; };
+    // 断线期间的事件不会补发：先确认登录还在，在就重连并全量刷新 /api/state
+    const lost = () => {
+      if (gen !== sseGen) return;
+      es?.close(); es = null;
+      sseState('off', `SSE 断了，${Math.round(retryMs / 1000)} 秒后重连`);
+      retryT = setTimeout(async () => {
+        if (gen !== sseGen) return;
+        const r = await api('GET', '/api/auth/me', undefined, { quiet: true });
+        if (r.status === 200) { openSse(); loadState(); } else if (r.status !== 401) lost();
+      }, retryMs);
+      retryMs = Math.min(retryMs * 2, 15000);
+    };
+    if (S.mode === 'cookie') {
+      es = new EventSource('/api/events');
+      es.onopen = opened;
+      es.onerror = () => { es?.close(); lost(); }; // 自己管重连，好在重连后刷新状态
+      es.onmessage = (e) => onEvent(e.data);
+      return;
+    }
+    ctl = new AbortController();
+    (async () => {
+      try {
+        const res = await fetch('/api/events', { headers: { Authorization: `Bearer ${S.token}` }, credentials: 'omit', signal: ctl.signal });
+        if (res.status === 401) { onLoggedOut(); return; }
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        opened();
+        const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let i;
+          while ((i = buf.indexOf('\n\n')) >= 0) {
+            const block = buf.slice(0, i); buf = buf.slice(i + 2);
+            const data = block.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim()).join('');
+            if (data) onEvent(data);
+          }
+        }
+        lost();
+      } catch (e) { if (e.name !== 'AbortError') lost(); }
+    })();
+  }
+
+  function onEvent(raw) {
+    let ev; try { ev = JSON.parse(raw); } catch { return; }
+    if (ev.type === 'browser-frame') return; // 浏览器实时画面，太多了，不记
+    logEvent(ev);
+    if (ev.type === 'message') upsertMessage(ev.message);
+    else if (ev.type === 'task') { S.tasks.set(ev.task.id, ev.task); renderTasks(); renderMessages(); }
+    else if (ev.type === 'activity') { if (ev.activity.status === 'running') S.activity.set(ev.activity.id, ev.activity); else S.activity.delete(ev.activity.id); renderTyping(); }
+    else if (ev.type === 'chats') { if (ev.currentChat !== S.currentChat) loadState(); else loadChats(); }
+  }
+
+  function logEvent(ev) {
+    const kind = ['message', 'task', 'activity'].includes(ev.type) ? ev.type : 'other';
+    let tip = '';
+    if (ev.type === 'message') { const m = ev.message; tip = `${m.role} ${m.id}${m.taskId ? ` taskId=${m.taskId}` : ''}${m.partOf ? ` partOf=${m.partOf}` : ''}${m.report ? ' [report]' : ''}${m.booking ? ` [${m.booking.type}]` : ''} ${(m.text || '').slice(0, 60)}`; }
+    else if (ev.type === 'task') tip = `${ev.task.id}「${ev.task.title}」${ev.task.status} r${ev.task.round || 1} steps=${ev.task.steps?.length || 0}`;
+    else if (ev.type === 'activity') tip = `${ev.activity.kind} ${ev.activity.status} ${ev.activity.step || ev.activity.outcome || ''}`;
+    else if (ev.type === 'chats') tip = `currentChat=${ev.currentChat}`;
+    const d = document.createElement('details');
+    d.dataset.k = kind;
+    d.hidden = !document.querySelector(`[data-f="${kind}"]`).checked;
+    d.innerHTML = `<summary><span class="tm">${hm()}</span><span class="ty">${esc(ev.type)}</span>${esc(tip)}</summary><pre>${esc(JSON.stringify(ev, null, 2))}</pre>`;
+    $('events').prepend(d);
+    $('nEvents').textContent = ++S.counts.events;
+  }
+
+  // ---------- 数据 ----------
+  async function loadState() {
+    const r = await api('GET', '/api/state', undefined, { quiet: true });
+    if (r.status !== 200) return;
+    const s = r.data;
+    S.me = s.me; S.currentChat = s.currentChat; S.chats = s.chats;
+    S.messages = new Map(s.messages.map((m) => [m.id, m]));
+    S.tasks = new Map(s.tasks.map((t) => [t.id, t]));
+    S.activity = new Map(s.activity.filter((a) => a.status === 'running').map((a) => [a.id, a]));
+    S.pending = [];
+    showWho(); renderChats(); renderMessages(); renderTasks();
+  }
+  async function loadChats() {
+    const q = $('chatQ').value.trim();
+    const r = await api('GET', `/api/chats${q ? `?q=${encodeURIComponent(q)}` : ''}`, undefined, { quiet: true });
+    if (r.status !== 200) return;
+    S.chats = r.data.chats; S.currentChat = r.data.currentChat; renderChats();
+  }
+  function upsertMessage(m) {
+    S.messages.set(m.id, m);
+    if (m.role === 'me' && m.chatId === S.currentChat) { // 换掉本地乐观显示的那条
+      const i = S.pending.findIndex((p) => p.text === m.text);
+      if (i >= 0) S.pending.splice(i, 1);
+    }
+    const c = S.chats.find((x) => x.id === m.chatId);
+    if (c) {
+      c.updatedAt = m.at;
+      if (m.text) c.preview = m.text.replace(/\s+/g, ' ').slice(0, 40);
+      if (c.title === '新聊天' && m.role === 'me' && m.text) c.title = m.text.replace(/\s+/g, ' ').slice(0, 20); // 和服务端 addMessage 的规则一样，服务端不单独推
+    }
+    renderChats();
+    if (m.chatId === S.currentChat) renderMessages();
+  }
+
+  // ---------- 渲染 ----------
+  function showWho() {
+    $('who').textContent = S.me ? `${S.me.name}（${S.me.role}）· ${S.mode === 'bearer' ? 'Bearer' : 'Cookie'}` : `未登录 · ${S.mode === 'bearer' ? 'Bearer' : 'Cookie'}`;
+    $('who').style.color = S.me ? 'var(--ok)' : '';
+    for (const id of ['lname', 'lpass', 'blogin']) $(id).hidden = !!S.me; // 登录后只留「退出」
+    $('blogout').hidden = !S.me;
+  }
+
+  function renderChats() {
+    const list = [...S.chats].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+    $('chats').innerHTML = list.map((c) => `<div class="chat-item${c.id === S.currentChat ? ' on' : ''}" data-chat="${esc(c.id)}">
+      <div class="t"><div class="title">${esc(c.title)}</div><div class="pv">${esc(c.preview || '')}</div></div>
+      <button class="ghost" data-del="${esc(c.id)}" title="DELETE /api/chats/${esc(c.id)}">✕</button></div>`).join('') || `<div class="empty" style="padding:20px">${S.me ? '没有聊天' : '未登录'}</div>`;
+    const cur = S.chats.find((c) => c.id === S.currentChat);
+    $('chatTitle').textContent = cur?.title || '—';
+    $('chatId').textContent = S.currentChat || '';
+  }
+
+  // 只做最常见的几种：标题、加粗、链接；其余原样保留（pre-wrap）
+  const md = (t) => esc(t)
+    .replace(/^#{1,6}\s+(.+)$/gm, '<b>$1</b>')
+    .replace(/\*\*(.+?)\*\*/g, '<b>$1</b>')
+    .replace(/(https?:\/\/[^\s<)）"]+)/g, '<a href="$1" target="_blank" rel="noopener">$1</a>');
+
+  // Bearer 模式下 <img src> 带不上 Authorization：先用 fetch 取回来再显示（Swift 里同理）
+  const blobs = new Map();
+  function imgTag(src) {
+    if (!src) return '';
+    if (!src.startsWith('/api/') || S.mode === 'cookie') return `<img src="${esc(src)}" alt="" loading="lazy">`;
+    if (blobs.has(src)) return `<img src="${blobs.get(src)}" alt="">`;
+    fetch(src, { headers: { Authorization: `Bearer ${S.token}` }, credentials: 'omit' }).then((r) => (r.ok ? r.blob() : null)).then((b) => {
+      if (!b || blobs.has(src)) return;
+      blobs.set(src, URL.createObjectURL(b));
+      document.querySelectorAll(`img[data-src="${CSS.escape(src)}"]`).forEach((i) => { i.src = blobs.get(src); });
+    }).catch(() => {});
+    return `<img data-src="${esc(src)}" alt="">`;
+  }
+
+  function taskChip(id, label) {
+    const t = S.tasks.get(id);
+    const st = t?.status;
+    return `<span class="chip" data-task="${esc(id)}" title="在右侧任务面板里看">${label}${t ? `「${esc(t.title)}」` : ` ${esc(id)}`}${st ? ` <b class="st-${st}">${STATUS[st]}</b>` : ''}</span>`;
+  }
+
+  function messageHtml(m) {
+    const parts = [];
+    if (m.text) parts.push(`<div class="bubble">${md(m.text)}</div>`);
+    if (m.images?.length) parts.push(`<div class="imgs">${m.images.map(imgTag).join('')}</div>`);
+    if (m.photos?.length) parts.push(`<div class="imgs">${m.photos.slice(0, 8).map((p) => imgTag(typeof p === 'string' ? p : p.url || p.src || p.thumb || '')).join('')}</div>`);
+    if (m.report) {
+      const r = m.report;
+      parts.push(`<div class="card"><div class="hd"><span>📄 ${esc(r.title || '结果')}${r.kind === 'result' ? '' : ' · 研究报告'}</span><button class="ghost" data-expand>展开</button></div>
+        <div class="bd">${md(r.body || '')}</div>${r.sources?.length ? `<div class="src">${r.sources.map((s) => `<a href="${esc(s.url)}" target="_blank" rel="noopener">[${s.n}] ${esc(s.title)}</a>`).join('')}</div>` : ''}</div>`);
+    }
+    if (m.booking?.type === 'ask') parts.push(askCard(m));
+    else if (m.booking) parts.push(`<div class="card"><div class="hd"><span>📞 ${esc(m.booking.type)}</span><button class="ghost" data-expand>展开</button></div><div class="bd mono">${esc(JSON.stringify(m.booking, null, 2))}</div></div>`);
+    const meta = [`<span>${hm(m.at)}</span>`, `<span class="id" data-copy="${esc(m.id)}" title="点击复制">${esc(m.id)}</span>`];
+    if (m.taskId) meta.push(taskChip(m.taskId, m.partOf ? '结果' : '派出'));
+    else if (m.partOf) meta.push(taskChip(m.partOf, '结果'));
+    if (m.steerOf) meta.push(taskChip(m.steerOf, '修改'));
+    if (m.stopOf) meta.push(taskChip(m.stopOf, '停止'));
+    if (m.round > 1) meta.push(`<span>第 ${m.round} 轮</span>`);
+    if (m.took) meta.push(`<span>用时 ${m.took}s</span>`);
+    return `<div class="row ${m.role === 'me' ? 'me' : 'bot'}">${parts.join('')}<div class="meta">${meta.join('')}</div></div>`;
+  }
+
+  function renderMessages() {
+    const box = $('msgs');
+    const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 80;
+    const list = [...S.messages.values()].filter((m) => m.chatId === S.currentChat).sort((a, b) => String(a.at).localeCompare(String(b.at)));
+    const pend = S.pending.map((p) => `<div class="row me pending"><div class="bubble">${md(p.text || `（${p.n} 张图）`)}</div><div class="meta"><span>发送中…</span></div></div>`).join('');
+    box.innerHTML = (list.map(messageHtml).join('') + pend) || '<div class="empty">这个聊天还没有消息</div>';
+    const slot = document.createElement('div'); slot.id = 'typingSlot'; box.append(slot);
+    renderTyping();
+    if (atBottom || S.pending.length) box.scrollTop = box.scrollHeight;
+  }
+
+  function askCard(m) {
+    const b = m.booking;
+    const picked = S.ask?.id === m.id ? S.ask.answers : (b.answers || {});
+    const qs = (b.questions || []).map((q) => `<div class="q"><b>${esc(q.label)}</b><div class="opts">${q.options.map((o) => `<button ${b.answered ? 'disabled' : ''} class="${picked[q.key] === o.value ? 'sel' : ''}" data-ask="${esc(m.id)}" data-key="${esc(q.key)}" data-val="${esc(o.value)}">${esc(o.label)}${o.hint ? `<small>${esc(o.hint)}</small>` : ''}</button>`).join('')}</div></div>`).join('');
+    const tail = b.answered ? `<div class="pill">已回答${b.typed ? `（直接打字：${esc(b.typed)}）` : ''}</div>`
+      : `<div><button class="primary" data-ask-send="${esc(m.id)}">提交选择</button> <span class="pill">也可以直接在输入框打字回答</span></div>`;
+    return `<div class="card"><div class="hd"><span>❓ 喵团想确认几件事</span></div><div class="ask">${qs}${tail}</div></div>`;
+  }
+
+  function renderTyping() {
+    const slot = $('typingSlot');
+    if (!slot) return;
+    const a = [...S.activity.values()].find((x) => (x.replyIn || x.chatId) === S.currentChat);
+    slot.innerHTML = a ? `<div class="typing">${esc(a.step || '在想')}${a.kind === 'deliver' ? ' · 转述任务结果' : ''}</div>` : '';
+    if (a) { const box = $('msgs'); if (box.scrollHeight - box.scrollTop - box.clientHeight < 140) box.scrollTop = box.scrollHeight; }
+  }
+
+  function renderTasks() {
+    const list = [...S.tasks.values()].sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+    $('nTasks').textContent = list.length || '';
+    const open = new Set([...document.querySelectorAll('#tasks details[open]')].map((d) => d.dataset.k));
+    const drafts = Object.fromEntries([...document.querySelectorAll('#tasks input[data-steer-in]')].map((i) => [i.dataset.steerIn, i.value]));
+    const focused = document.activeElement?.dataset?.steerIn;
+    $('tasks').innerHTML = list.map((t) => {
+      const live = t.status === 'running' || t.status === 'queued';
+      const steps = (t.steps || []).slice(-6).map((s) => `<li>${s.status === 'running' ? '⏳' : '✓'} ${esc(s.label || s.name)}${s.title ? ` · ${esc(s.title)}` : ''}</li>`).join('');
+      const revs = (t.revisions || []).map((v) => `第 ${v.round} 轮 · ${v.state} · ${v.text}`).join('\n');
+      const took = t.endedAt && t.startedAt ? ` · ${Math.round((Date.parse(t.endedAt) - Date.parse(t.startedAt)) / 1000)}s` : '';
+      const det = (k, label, body) => `<details data-k="${k}${esc(t.id)}"${open.has(`${k}${t.id}`) ? ' open' : ''}><summary>${label}</summary><pre>${esc(body)}</pre></details>`;
+      return `<div class="task${S.focusTask === t.id ? ' focus' : ''}" data-tid="${esc(t.id)}">
+        <div class="top"><b>${esc(t.title)}</b><span class="st-${t.status}">${STATUS[t.status] || esc(t.status)}</span></div>
+        <div class="sub">${esc(t.id)} · ${esc(t.kind)}${t.round > 1 ? ` · 第 ${t.round} 轮` : ''} · ${hm(t.createdAt)}${took}</div>
+        ${steps ? `<ul class="steps">${steps}</ul>` : ''}
+        ${t.error ? `<div class="sub" style="color:var(--bad)">${esc(t.error)}</div>` : ''}
+        <div class="acts">
+          <input data-steer-in="${esc(t.id)}" placeholder="${live ? '插话：新要求' : '修改：开新一轮'}" value="${esc(drafts[t.id] || '')}">
+          <button data-steer="${esc(t.id)}" title="POST /api/tasks/${esc(t.id)}/steer">${live ? '插话' : '修改'}</button>
+          ${live ? `<button data-stop="${esc(t.id)}" title="POST /api/tasks/${esc(t.id)}/stop">停止</button>` : ''}
+          ${t.status === 'failed' || t.status === 'stopped' ? `<button data-retry="${esc(t.id)}" title="POST /api/tasks/${esc(t.id)}/retry">重试</button>` : ''}
+        </div>
+        ${t.result?.text ? det('r', '结果全文', t.result.text) : ''}
+        ${revs ? det('v', `修改记录（${t.revisions.length}）`, revs) : ''}
+        ${det('j', '原始 JSON', JSON.stringify(t, null, 2))}
+      </div>`;
+    }).join('') || `<div class="empty" style="padding:24px">还没有后台任务。<br>在对话里说「后台帮我……」试试</div>`;
+    if (focused) { const i = document.querySelector(`input[data-steer-in="${CSS.escape(focused)}"]`); i?.focus(); }
+  }
+
+  // ---------- 登录 ----------
+  function onLoggedOut() {
+    const was = S.me || S.token;
+    S.me = null; closeSse(); showWho();
+    if (S.mode === 'bearer') { S.token = ''; store.set('pg.token', null); }
+    if (was) { $('msgs').innerHTML = '<div class="empty">登录已失效（401），请重新登录</div>'; toast('401：登录失效了'); }
+  }
+  async function boot() {
+    showWho();
+    if (S.mode === 'bearer' && !S.token) { renderChats(); $('msgs').innerHTML = '<div class="empty">Bearer 模式：在右上角登录拿 token</div>'; return; }
+    const r = await api('GET', '/api/auth/me', undefined, { quiet: true });
+    if (r.status !== 200) { S.me = null; showWho(); renderChats(); $('msgs').innerHTML = '<div class="empty">未登录：在右上角登录</div>'; return; }
+    S.me = r.data; showWho();
+    openSse(); loadState();
+  }
+  $('blogin').onclick = async () => {
+    const name = $('lname').value.trim(), password = $('lpass').value;
+    if (!name || !password) return toast('填一下名字和密码');
+    const r = await api('POST', '/api/auth/login', { name, password, ...(S.mode === 'bearer' && { token: true }) });
+    if (r.status !== 200) return;
+    if (S.mode === 'bearer') {
+      if (!r.data?.token) return toast('服务端没返回 token：这个 App 的版本太旧，还不支持 Bearer token，更新并重启后再试');
+      S.token = r.data.token; store.set('pg.token', S.token);
+    }
+    $('lpass').value = '';
+    boot();
+  };
+  $('lpass').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('blogin').click(); });
+  $('blogout').onclick = async () => {
+    if (S.me) await api('POST', '/api/auth/logout');
+    S.me = null; S.token = ''; store.set('pg.token', null); closeSse(); showWho();
+    S.messages.clear(); S.tasks.clear(); S.chats = []; renderChats(); renderTasks();
+    $('msgs').innerHTML = '<div class="empty">已退出</div>';
+  };
+  $('mode').onchange = () => {
+    S.mode = $('mode').value; store.set('pg.mode', S.mode);
+    closeSse(); S.me = null;
+    toast(S.mode === 'bearer' ? 'Bearer 模式：所有请求只带 Authorization 头，不带 cookie' : 'Cookie 模式：浏览器自动带 cookie');
+    boot();
+  };
+
+  // ---------- 发消息 ----------
+  async function shrink(file) { // 和 App 一样：缩到最长边 1280 再传
+    const url = URL.createObjectURL(file);
+    try {
+      const img = await new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = no; i.src = url; });
+      const k = Math.min(1, 1280 / Math.max(img.width, img.height));
+      const c = Object.assign(document.createElement('canvas'), { width: Math.round(img.width * k), height: Math.round(img.height * k) });
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      return c.toDataURL('image/jpeg', 0.85);
+    } finally { URL.revokeObjectURL(url); }
+  }
+  const renderThumbs = () => { $('thumbs').innerHTML = S.images.map((d, i) => `<span><img src="${d}" alt=""><button data-unimg="${i}" title="去掉">✕</button></span>`).join(''); };
+  $('pick').onclick = () => $('file').click();
+  $('file').onchange = async () => {
+    for (const f of [...$('file').files]) {
+      if (S.images.length >= 3) { toast('最多 3 张'); break; }
+      try { S.images.push(await shrink(f)); } catch { toast(`读不了 ${f.name}`); }
+    }
+    $('file').value = ''; renderThumbs();
+  };
+  $('thumbs').onclick = (e) => { const i = e.target.dataset.unimg; if (i !== undefined) { S.images.splice(+i, 1); renderThumbs(); } };
+
+  async function send(textOverride, ask) {
+    if (!S.me) return toast('先登录');
+    const text = (textOverride ?? $('input').value).trim();
+    if (!text && !S.images.length) return;
+    const images = S.images; S.images = []; renderThumbs();
+    if (textOverride === undefined) { $('input').value = ''; autosize(); }
+    S.pending.push({ text, n: images.length }); renderMessages();
+    $('send').disabled = true;
+    const t0 = performance.now();
+    $('hint').textContent = '等调度模型想完…（回复会先从 SSE 到）';
+    const r = await api('POST', '/api/message', { text, images, ...(ask && { ask }) });
+    $('send').disabled = false;
+    $('hint').textContent = `POST /api/message → ${r.status || 'ERR'}，用时 ${((performance.now() - t0) / 1000).toFixed(1)}s`;
+    if (r.status !== 200) { S.pending = []; renderMessages(); }
+    S.ask = null; $('asking').textContent = '';
+  }
+  $('send').onclick = () => send();
+  const autosize = () => { const t = $('input'); t.style.height = 'auto'; t.style.height = `${Math.min(160, t.scrollHeight + 2)}px`; };
+  $('input').addEventListener('input', autosize);
+  $('input').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
+
+  // ---------- 聊天窗里的交互 ----------
+  $('msgs').onclick = (e) => {
+    const el = e.target.closest('[data-ask],[data-ask-send],[data-task],[data-copy],[data-expand]');
+    if (!el) return;
+    if (el.dataset.expand !== undefined) { const c = el.closest('.card'); c.classList.toggle('open'); el.textContent = c.classList.contains('open') ? '收起' : '展开'; return; }
+    if (el.dataset.copy) { navigator.clipboard?.writeText(el.dataset.copy).then(() => toast(`已复制 ${el.dataset.copy}`), () => {}); return; }
+    if (el.dataset.task) { focusTask(el.dataset.task); return; }
+    if (el.dataset.ask) {
+      const id = el.dataset.ask;
+      if (S.ask?.id !== id) S.ask = { id, answers: {} };
+      S.ask.answers[el.dataset.key] = el.dataset.val;
+      $('asking').textContent = `将附带 ask.answers = ${JSON.stringify(S.ask.answers)}`;
+      renderMessages(); return;
+    }
+    if (el.dataset.askSend) {
+      const m = S.messages.get(el.dataset.askSend);
+      const ans = S.ask?.id === m.id ? S.ask.answers : {};
+      const qs = m.booking.questions || [];
+      if (qs.some((q) => !ans[q.key])) return toast('每个问题都选一下');
+      send(qs.map((q) => `${q.label}${ans[q.key]}`).join('；'), { id: m.id, answers: ans }); // App 替用户拼的那句话
+    }
+  };
+  function focusTask(id) {
+    S.focusTask = id; renderTasks();
+    setTab('tasks'); setMobile('side');
+    document.querySelector(`.task[data-tid="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
+
+  // ---------- 聊天列表 ----------
+  $('chats').onclick = async (e) => {
+    const del = e.target.closest('[data-del]');
+    if (del) { e.stopPropagation(); const r = await api('DELETE', `/api/chats/${del.dataset.del}`); if (r.status === 200) loadState(); return; }
+    const item = e.target.closest('[data-chat]');
+    if (!item) return;
+    if (item.dataset.chat !== S.currentChat) { await api('POST', `/api/chats/${item.dataset.chat}/open`); await loadState(); }
+    setMobile('section');
+  };
+  $('newChat').onclick = async () => { if (!S.me) return toast('先登录'); await api('POST', '/api/chats'); await loadState(); setMobile('section'); };
+  let qT; $('chatQ').oninput = () => { clearTimeout(qT); qT = setTimeout(loadChats, 300); };
+  $('reload').onclick = () => (S.me ? loadState() : boot());
+
+  // ---------- 任务面板 ----------
+  $('tasks').onclick = async (e) => {
+    const b = e.target.closest('button'); if (!b) return;
+    if (b.dataset.stop) await api('POST', `/api/tasks/${b.dataset.stop}/stop`);
+    else if (b.dataset.retry) await api('POST', `/api/tasks/${b.dataset.retry}/retry`);
+    else if (b.dataset.steer) {
+      const inp = document.querySelector(`input[data-steer-in="${CSS.escape(b.dataset.steer)}"]`);
+      const text = inp.value.trim();
+      if (!text) return toast('写一下新要求');
+      const r = await api('POST', `/api/tasks/${b.dataset.steer}/steer`, { text });
+      if (r.status === 200) {
+        document.querySelector(`input[data-steer-in="${CSS.escape(b.dataset.steer)}"]`).value = '';
+        toast(r.data.state === 'round' ? `开了第 ${r.data.round} 轮（state=round）` : r.data.state === 'sent' ? '已插进正在跑的这一轮（state=sent）' : `steer：state=${r.data.state}`);
+      }
+    }
+  };
+  $('tasks').addEventListener('keydown', (e) => { if (e.key === 'Enter' && e.target.dataset.steerIn) document.querySelector(`button[data-steer="${CSS.escape(e.target.dataset.steerIn)}"]`)?.click(); });
+
+  // ---------- 右侧标签、事件筛选、任意请求 ----------
+  const setTab = (p) => { document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.p === p)); document.querySelectorAll('.pane').forEach((x) => x.classList.toggle('on', x.dataset.p === p)); };
+  $('tabs').onclick = (e) => { const b = e.target.closest('button'); if (b) setTab(b.dataset.p); };
+  document.querySelectorAll('[data-f]').forEach((c) => { c.onchange = () => document.querySelectorAll(`#events details[data-k="${c.dataset.f}"]`).forEach((d) => { d.hidden = !c.checked; }); });
+  document.querySelectorAll('[data-clear]').forEach((b) => { b.onclick = () => { const k = b.dataset.clear; $(k).innerHTML = ''; S.counts[k] = 0; $(k === 'events' ? 'nEvents' : 'nHttp').textContent = ''; }; });
+  const fire = (m, p, body) => { S.reqWatch = p; api(m, p, body); };
+  $('rsend').onclick = () => { const b = $('rb').value.trim(); fire($('rm').value, $('rp').value.trim(), b || undefined); };
+  $('quick').onclick = (e) => { const b = e.target.closest('[data-q]'); if (!b) return; const [m, p] = b.dataset.q.split(' '); $('rm').value = m; $('rp').value = p; $('rb').value = ''; fire(m, p); };
+
+  // ---------- 窄屏：三栏变成三个标签 ----------
+  function setMobile(k) {
+    document.querySelectorAll('#mtabs button').forEach((b) => b.classList.toggle('on', b.dataset.m === k));
+    document.querySelectorAll('.app > *').forEach((x) => x.classList.toggle('m-on', x.matches(k === 'side' ? '.side' : k)));
+  }
+  $('mtabs').onclick = (e) => { const b = e.target.closest('button'); if (b) setMobile(b.dataset.m); };
+
+  boot();
+})();
+</script>
+</body>
+</html>
