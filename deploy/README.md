@@ -6,11 +6,11 @@
 同事浏览器 ──HTTPS──► Caddy（自动证书，对外只开 80 / 443）
                         ├─ app.<域名>   ──► App :3210（登录、每个人的状态和 SSE、调度者、任务队列）
                         └─ sites.<域名> ──► 网站 :3211（agent 做的网页，和 App 不同源）
-App ──按账号路由──► 执行 agent：每人一个 Hermes gateway（:8701、:8702 …，由 scripts/agents.mjs 守护）
+App ──按账号路由──► 执行 agent：每人一个 Pi SDK gateway（:8701、:8702 …，由 scripts/agents.mjs 守护）
     └────────────► 沙箱浏览器 :8660（大家共用，平台账号由管理员登录）
 ```
 
-为什么每人一个 agent：Hermes 一个主目录里没有「用户」这个概念。记忆每轮都注入 system prompt，`session_search` 搜的是整个会话库，账本、关注、网站也都在主目录下，共用就串了。每个 gateway 空闲约 300 MB。
+每个人的 Pi 会话、记忆、账本、关注和网站使用独立主目录。Pi SDK 与项目自身的 Node 业务工具直接运行，不需要其他 agent 框架或 Python 工具环境。容量请按实际模型上下文和并发量测量。
 
 数据都在 `app/data/`（不进仓库）：
 
@@ -20,8 +20,9 @@ app/data/
   users/<uid>/
     state.json            聊天、任务、目标、位置
     uploads/  frames/     上传的图、浏览回放
-    hermes-home/          这个人的 agent 主目录：记忆、账本、关注、网站、会话库
-                          （插件、SOUL.md 软链到仓库的 hermes-home；喵团技能和 config.yaml 各自一份）
+    agent-home/          这个人的 agent 主目录：记忆、账本、关注、网站
+                          （SOUL.md 链到模板；技能、config.yaml 各自一份）
+      pi/sessions/        这个人的 Pi 任务会话
 ```
 
 ## 1. 准备
@@ -35,7 +36,7 @@ app/data/
 ```bash
 ssh root@<服务器>
 apt-get update && apt-get install -y git
-git clone --recurse-submodules <仓库地址> /srv/cattuan
+git clone <仓库地址> /srv/cattuan
 APP_DOMAIN=app.example.com SITES_DOMAIN=sites.example.com bash /srv/cattuan/deploy/setup.sh
 ```
 
@@ -44,9 +45,9 @@ APP_DOMAIN=app.example.com SITES_DOMAIN=sites.example.com bash /srv/cattuan/depl
 `setup.sh` 可以重复跑，主要做这些事：
 
 - 设好时区。
-- 装 Node、Python、Caddy、中文字体，以及 Xvfb / noVNC（服务器没有屏幕，平台登录窗口开在虚拟显示上）。
+- 装 Node、Caddy、中文字体，以及 Xvfb / noVNC（服务器没有屏幕，平台登录窗口开在虚拟显示上）。
 - 建运行用户 `cattuan`。
-- 装 Hermes 的 venv、沙箱的 Chromium。
+- 安装 App 的 Pi SDK、原生业务工具依赖，以及沙箱的 Chromium。
 - 写好 `/etc/cattuan/cattuan.env` 和 `/etc/caddy/Caddyfile`。
 - 注册 systemd 服务和每日备份。
 - 防火墙只开 SSH、80、443。
@@ -54,7 +55,7 @@ APP_DOMAIN=app.example.com SITES_DOMAIN=sites.example.com bash /srv/cattuan/depl
 ## 3. 填 key、建管理员、启动
 
 ```bash
-sudo -u cattuan nano /srv/cattuan/hermes-home/.env          # 填 LONGCAT_API_KEY=…
+sudo -u cattuan nano /srv/cattuan/agent-home/.env          # 填 LONGCAT_API_KEY=…
 cd /srv/cattuan && sudo -u cattuan node scripts/user.mjs invite <你的名字> --admin
 systemctl restart caddy
 systemctl start cattuan-xvfb cattuan-sandbox cattuan-agents cattuan-app
@@ -106,26 +107,28 @@ cd /srv/cattuan && sudo -u cattuan node scripts/user.mjs invite 小王
 **更新代码**：
 
 ```bash
-cd /srv/cattuan && sudo -u cattuan git pull && sudo -u cattuan git submodule update
+cd /srv/cattuan && sudo -u cattuan git pull && sudo -u cattuan bash -lc 'cd /srv/cattuan/app && npm ci --omit=dev'
 systemctl restart cattuan-agents cattuan-sandbox cattuan-app
 ```
+
+升级前先等任务结束并停服，备份账号库与各用户的 `agent-home`；启动时直接使用当前 Pi 数据布局。
 
 改了 `deploy/systemd/` 里的文件，要先复制到 `/etc/systemd/system/` 再 `systemctl daemon-reload`。
 
 **日志**：
 
 - App：`journalctl -u cattuan-app -f`；agent 守护进程、沙箱同理。
-- 某个人的 agent：`app/data/users/<uid>/hermes-home/gateway.out`。
+- 某个人的 agent：`app/data/users/<uid>/agent-home/gateway.out`。
 
 **备份**：每天 04:00 自动备份到 `/var/backups/cattuan/`，保留 14 天。SQLite 库是在线导出的一致快照。手动备份：`sudo -u cattuan /srv/cattuan/deploy/backup.sh`。建议再定期拷一份到别的机器，或用云厂商的快照。
 
 **恢复**：
 
 1. 停掉 `cattuan-app`、`cattuan-agents`。
-2. 解开备份，`data/` 覆盖 `app/data/`，`hermes-home/` 覆盖仓库的 `hermes-home/`。
+2. 解开备份，`data/` 覆盖 `app/data/`，`agent-home/` 覆盖仓库的 `agent-home/`。
 3. `chown -R cattuan:cattuan`，再启动服务。
 
-**改了 `hermes-home/config.yaml`**（比如加 toolset）：新账号自动用新的；已有的人每人一份 config.yaml（技能商店装技能时会改它），要手动同步过去。
+**改了 `agent-home/config.yaml`**（比如加 toolset）：新账号自动用新的；已有的人每人一份 config.yaml（技能商店装技能时会改它），要手动同步过去。
 
 ## 8. 把本机的数据带上去（可选）
 
@@ -137,7 +140,7 @@ systemctl restart cattuan-agents cattuan-sandbox cattuan-app
    ```bash
    rsync -az app/data/state.json app/data/frames app/data/uploads root@<服务器>:/srv/cattuan/app/data/
    rsync -az --exclude '.env' --exclude 'installs/' --exclude 'cache/' --exclude 'logs/' --exclude 'plugins/langfuse/' \
-     --exclude '*.lock' --exclude 'gateway*' hermes-home/ root@<服务器>:/srv/cattuan/hermes-home/
+     --exclude '*.lock' --exclude 'gateway*' agent-home/ root@<服务器>:/srv/cattuan/agent-home/
    ```
 
 3. 在服务器上执行：
@@ -147,11 +150,11 @@ systemctl restart cattuan-agents cattuan-sandbox cattuan-app
    cd /srv/cattuan && sudo -u cattuan node scripts/user.mjs adopt <你的名字>
    ```
 
-   这一步把聊天、任务、目标归到你的账号下，agent 沿用仓库的 hermes-home。它会打印设密码的链接。
+   这一步把聊天、任务、目标归到你的账号下，agent 沿用仓库的 agent-home。它会打印设密码的链接。
 
 ## 安全须知
 
-- **管理员看得到**：管理员在服务器上能看到所有人的数据（状态文件、agent 的会话库、Langfuse 轨迹），提前跟同事说清楚。
+- **管理员看得到**：管理员在服务器上能看到所有人的数据（状态文件、agent 的会话文件、Langfuse 轨迹），提前跟同事说清楚。
 - **别放敏感内容**：服务器不在公司内网，别在里面处理公司敏感信息。
-- **Langfuse**：先别和业务放在同一台 8G 机器上，ClickHouse 很吃内存。它记着所有人的完整对话，只给管理员看。App 里的「轨迹」链接只对管理员显示。
+- **Langfuse**：先别和业务放在同一台 8G 机器上，ClickHouse 很吃内存。当前采集 App/BFF 侧的调度模型与任务生命周期，可能包含完整对话和任务说明，只给管理员看；Pi 内部模型调用尚未接入该采集。App 里的「轨迹」链接只对管理员显示。
 - **网站是公开的**：agent 做的网页知道链接就能看，网站 id 是随机的，不登录也能打开（方便分享）。

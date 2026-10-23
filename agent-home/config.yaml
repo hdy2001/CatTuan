@@ -1,0 +1,18 @@
+agent: {}
+platform_toolsets:
+  api_server:
+    - idol
+    - vision
+    - memory
+    - session_search
+    - ledger
+    - skills
+    - skillstore
+    - deepsearch
+    - sites
+    - phone
+memory:
+  memory_enabled: true
+  user_profile_enabled: true
+skills:
+  disabled: []

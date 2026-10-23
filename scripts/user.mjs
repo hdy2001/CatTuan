@@ -5,7 +5,7 @@
 //   disable <名字>            停用：立刻下线，他的 agent 也会停掉；数据保留
 //   enable <名字>             恢复停用的账号
 //   adopt <名字>              从单用户版升级：把本机原来的数据（app/data 里的聊天、任务、目标、上传的图、回放，
-//                             以及仓库 hermes-home 里 agent 的记忆、账本、关注、网站、会话）归到这个账号下，设成管理员。
+//                             以及仓库 agent-home 里 agent 的记忆、账本、关注、网站、会话）归到这个账号下，设成管理员。
 //                             只在升级时跑一次，跑之前先停掉 App 和 agent。
 import fs from 'node:fs';
 import net from 'node:net';
@@ -67,10 +67,10 @@ if (cmd === 'invite') {
   const legacy = readEnvFile(path.join(TEMPLATE, '.env'));
   const port = Number(legacy.API_SERVER_PORT || 8650);
   if (await listening(Number(process.env.PORT || 3210))) die('App 还在跑，先停掉（本机：pkill -f "node .*app/server.mjs"）');
-  if (await listening(port)) die(`agent 还在跑（:${port}），先停掉（本机：pkill -f "hermes gateway run"）`);
+  if (await listening(port)) die(`agent 还在跑（:${port}），先停掉（本机：pkill -f "node .*app/pi-gateway.mjs"）`);
   let u = acc.findUser(name);
-  if (u && u.hermes_home !== 'hermes-home') die(`已经有叫「${name}」的账号了，换个名字`);
-  u ||= acc.createUser({ name, role: 'admin', hermesHome: path.relative(ROOT, TEMPLATE), agentPort: port });
+  if (u && u.agent_home !== 'agent-home') die(`已经有叫「${name}」的账号了，换个名字`);
+  u ||= acc.createUser({ name, role: 'admin', agentHome: path.relative(ROOT, TEMPLATE), agentPort: port });
   const dir = userDir(u.id);
   if (fs.existsSync(path.join(dir, 'state.json'))) die(`${dir} 里已经有数据了，不覆盖`);
   fs.mkdirSync(dir, { recursive: true });
@@ -82,7 +82,7 @@ if (cmd === 'invite') {
   fs.renameSync(legacyState, path.join(dir, 'state.json'));
   if (!legacy.API_SERVER_KEY) ensureAgentEnv(TEMPLATE, port);
   console.log(`原来的聊天、任务、目标、上传的图和回放都归到了「${u.name}」（管理员）下：${dir}`);
-  console.log(`agent 沿用仓库的 hermes-home（记忆、账本、关注、网站、会话都在原地），端口 :${port}`);
+  console.log(`agent 沿用仓库的 agent-home（记忆、账本、关注、网站、会话都在原地），端口 :${port}`);
   console.log(`\n打开这个链接设密码（7 天内有效）：\n\n  ${inviteLink(u)}\n`);
 } else {
   const lines = fs.readFileSync(new URL(import.meta.url), 'utf8').split('\n').slice(1);

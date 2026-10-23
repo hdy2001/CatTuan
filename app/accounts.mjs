@@ -48,7 +48,7 @@ export function openAccounts(dataDir) {
       role TEXT NOT NULL DEFAULT 'member' CHECK (role IN ('admin', 'member')),
       status TEXT NOT NULL DEFAULT 'invited' CHECK (status IN ('invited', 'active', 'disabled')),
       password_hash TEXT,
-      hermes_home TEXT,
+      agent_home TEXT,
       agent_port INTEGER UNIQUE,
       created_at TEXT NOT NULL,
       last_login_at TEXT
@@ -79,7 +79,7 @@ export function openAccounts(dataDir) {
     );
   `);
   const q = (sql) => db.prepare(sql);
-  const USER_COLS = 'id, name, role, status, hermes_home, agent_port, created_at, last_login_at';
+  const USER_COLS = 'id, name, role, status, agent_home, agent_port, created_at, last_login_at';
 
   const api = {
     db,
@@ -93,18 +93,18 @@ export function openAccounts(dataDir) {
       return Math.max(AGENT_PORT_BASE, (row?.p || 0) + 1);
     },
 
-    createUser({ name, role = 'member', hermesHome = null, agentPort }) {
+    createUser({ name, role = 'member', agentHome = null, agentPort }) {
       name = String(name || '').trim();
       if (!NAME_RE.test(name)) throw new Error('名字只能用中英文、数字和 _ . -，最多 20 个字');
       if (api.findUser(name)) throw new Error(`已经有叫「${name}」的账号了`);
       const id = `u_${crypto.randomBytes(5).toString('hex')}`;
-      q(`INSERT INTO users (id, name, role, status, hermes_home, agent_port, created_at) VALUES (?, ?, ?, 'invited', ?, ?, ?)`)
-        .run(id, name, role, hermesHome, agentPort ?? api.nextAgentPort(), isoNow());
+      q(`INSERT INTO users (id, name, role, status, agent_home, agent_port, created_at) VALUES (?, ?, ?, 'invited', ?, ?, ?)`)
+        .run(id, name, role, agentHome, agentPort ?? api.nextAgentPort(), isoNow());
       return api.getUser(id);
     },
 
     update(id, fields) {
-      const keys = Object.keys(fields).filter((k) => ['role', 'status', 'hermes_home', 'agent_port'].includes(k));
+      const keys = Object.keys(fields).filter((k) => ['role', 'status', 'agent_home', 'agent_port'].includes(k));
       if (keys.length) q(`UPDATE users SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...keys.map((k) => fields[k]), id);
       if (fields.status === 'disabled') q('DELETE FROM auth_sessions WHERE user_id = ?').run(id); // 停用立刻下线
       return api.getUser(id);

@@ -1,7 +1,0 @@
-name: skill-store
-version: 0.1.0
-description: 执行 agent 按需找技能、装技能（本地内置 + 在线技能库），外加只读网页读取 fetch_url
-author: CatTuan
-provides_tools:
-  - skill_store
-  - fetch_url

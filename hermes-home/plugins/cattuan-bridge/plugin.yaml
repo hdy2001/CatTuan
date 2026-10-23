@@ -1,4 +1,0 @@
-name: cattuan-bridge
-version: 0.1.0
-description: 把执行 agent 每次工具调用的完整参数和结果推给喵团 App（/v1/runs 的事件流里没有这些）
-author: CatTuan

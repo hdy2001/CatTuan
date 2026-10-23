@@ -1,5 +1,5 @@
 [Unit]
-Description=CatTuan 执行 agent（每个用户一个 Hermes gateway，由 scripts/agents.mjs 守护）
+Description=CatTuan 执行 agent（每个用户一个 Pi SDK gateway，由 scripts/agents.mjs 守护）
 After=network-online.target cattuan-sandbox.service
 Wants=network-online.target
 

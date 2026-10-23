@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # 启动本机自托管的 Langfuse（轨迹分析，http://localhost:3000）。容器设了 restart: always，起一次以后跟着 docker 自动起。
-# 第一次运行：随机生成 langfuse/.env（数据库密码、项目 key、登录账号），把项目 key 写进 hermes-home/.env，
-# 并给执行 agent 装上 Hermes 官方的 langfuse 插件。执行 agent（插件）和调度者（app/server.mjs）都从 hermes-home/.env 读 key。
+# 第一次运行：随机生成 langfuse/.env（数据库密码、项目 key、登录账号），把项目 key 写进 agent-home/.env，
+# App/BFF（app/server.mjs）从这里读 key；使用项目自身的轨迹配置。
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DIR="$ROOT/langfuse"
 ENV_FILE="$DIR/.env"
-HERMES_ENV="$ROOT/hermes-home/.env"
+AGENT_ENV="$ROOT/agent-home/.env"
 CHANGED=""
 
 command -v docker >/dev/null || { echo "需要 docker：brew install colima docker docker-compose && colima start"; exit 1; }
@@ -39,31 +39,20 @@ PORT=$(get LANGFUSE_PORT)
 
 "${DC[@]}" -p cattuan-langfuse -f "$DIR/docker-compose.yml" --env-file "$ENV_FILE" up -d
 
-# 项目 key 写进 hermes-home/.env（已经有就不动）
-if ! grep -q '^HERMES_LANGFUSE_PUBLIC_KEY=.' "$HERMES_ENV" 2>/dev/null; then
-  cat >> "$HERMES_ENV" <<EOF
-HERMES_LANGFUSE_PUBLIC_KEY=$(get LANGFUSE_PUBLIC_KEY)
-HERMES_LANGFUSE_SECRET_KEY=$(get LANGFUSE_SECRET_KEY)
-HERMES_LANGFUSE_BASE_URL=http://127.0.0.1:$PORT
+# 项目 key 写进 agent-home/.env（已经有就不动）
+if ! grep -q '^CATTUAN_LANGFUSE_PUBLIC_KEY=.' "$AGENT_ENV" 2>/dev/null; then
+  cat >> "$AGENT_ENV" <<EOF
+CATTUAN_LANGFUSE_PUBLIC_KEY=$(get LANGFUSE_PUBLIC_KEY)
+CATTUAN_LANGFUSE_SECRET_KEY=$(get LANGFUSE_SECRET_KEY)
+CATTUAN_LANGFUSE_BASE_URL=http://127.0.0.1:$PORT
 EOF
-  chmod 600 "$HERMES_ENV"
-  echo "已把 Langfuse 项目 key 写进 hermes-home/.env"
+  chmod 600 "$AGENT_ENV"
+  echo "已把 Langfuse 项目 key 写进 agent-home/.env"
   CHANGED=1
 fi
 
-# 执行 agent 这边：Hermes 官方的 langfuse 插件（装在 hermes-home/plugins/langfuse，不进仓库）
-if [ ! -d "$ROOT/hermes-home/plugins/langfuse" ]; then
-  export HERMES_HOME="$ROOT/hermes-home"
-  # 装了带 Python 依赖的插件以后，Hermes 改用它自己管理的环境（hermes-home/installs/）跑 agent。这个环境默认不带 extras，
-  # API server 要的 aiohttp 等就没了，agent 起不来。所以先记下原来 venv 里有哪些 extras，装完插件按原样补上。
-  EXTRAS=$(cd "$ROOT/hermes-agent" && .venv/bin/python -c "from pathlib import Path; from pm.features import installed_extras; \
-print(' '.join(installed_extras(Path('.').resolve(), Path('.venv'), python_exe=Path('.venv/bin/python'))))")
-  "$ROOT/hermes-agent/.venv/bin/hermes" plugins install langfuse --yes-deps --enable </dev/null
-  # shellcheck disable=SC2046
-  "$ROOT/hermes-agent/.venv/bin/hermes" pm install venv $(for e in $EXTRAS; do printf -- '--extra %s ' "$e"; done) </dev/null
-  CHANGED=1
-fi
-[ -n "$CHANGED" ] && echo "重启 agent 和 app 后生效：scripts/restart.sh all"
+[ -n "$CHANGED" ] && echo "重启 App 后生效：scripts/restart.sh app"
+echo "当前采集 App/BFF 的调度模型与任务生命周期轨迹；Pi 内部模型调用尚未接入采集。"
 
 echo "等 Langfuse 起来（第一次要拉镜像、跑数据库迁移，可能几分钟）…"
 for _ in $(seq 1 180); do

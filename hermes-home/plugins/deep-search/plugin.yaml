@@ -1,7 +1,0 @@
-name: deep-search
-version: 0.1.0
-description: 深度搜索：在沙箱真实浏览器里搜必应、读网页
-author: CatTuan
-provides_tools:
-  - deep_web_search
-  - read_webpage

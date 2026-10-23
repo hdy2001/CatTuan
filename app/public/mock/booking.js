@@ -6,11 +6,9 @@
 // 除了提问选项卡，聊天里只有通话组件：每通电话打完挂在那条消息下面，点开看详情和转写。喵团有自己的电话：侧边栏「喵团档案 → 电话」里是全部通话记录。
 // URL 参数：variant=happy|decide|noanswer|query|spa（五种场景）、step=0..N（演到第几步）、clean=1（隐藏控制条和像素小猫）
 // 左下角控制条：‹ › 或键盘 ← → 切步骤，H 隐藏 / 显示控制条和小猫。也可以在提问选项卡上选、在输入框里打字往下走。
-import { noticeHtml, callLogHtml, callDetailHtml, PHONE_ICON } from '../booking.js';
+import { noticeHtml, openCallLog, openCallDetail, closeCallSheet } from '../booking.js';
 
 const AGENT = '喵团'; // 电话里的自称；PRD 截图要用 Longcat 就改这里
-// 喵团打电话用的线路（仿 Cue 每个 agent 有自己的电话）。外显号码是木星从号码池里挑的、不固定（PRD 待确认项 2），界面上不显示号码，统一写「美团专线」
-const AGENT_LINE = '美团专线';
 const PHONE_TAIL = '5678'; // 演示账号的手机尾号
 const ASK_IF = ['要交定金或有最低消费', '只能约别的时间', '店里要和你本人通话'];
 
@@ -77,7 +75,7 @@ function reset() {
   (api.S.activity ||= []).length = 0;
   api.typing(false);
   hideNotice();
-  closeCalls();
+  closeCallSheet();
   api.S.chats[0].title = VARIANTS[variant].title || '约美甲';
   R = { played: 0, vt: Date.now() - 15 * 60_000, calls: [], ctx: { pick: 0, shop: SHOPS[0], item: '纯色', time: '15:00', mode: variant === 'query' ? 'query' : 'execute' } };
 }
@@ -508,7 +506,7 @@ async function play(userText) {
   R.played++;
   syncBar();
   hideNotice();
-  closeCalls();
+  closeCallSheet();
   const said = userText ?? beat.user?.();
   if (said) { me(said); api.render(); }
   busy = !instant;
@@ -593,42 +591,15 @@ function onClick(e) {
   if (e.target.closest('[data-ask-other]')) askOther();
 }
 
-// ---------- 喵团的电话（仿 Cue 的个人资料）：侧边栏「喵团档案」里加一行「电话」，点开是通话记录，再点一通看详情和转写 ----------
-function addPhoneRow() {
-  const resume = document.querySelector('#drawer [data-open-viewer="resume"]');
-  if (!resume || document.querySelector('#drawer [data-open-calls]')) return;
-  const row = document.createElement('button');
-  row.type = 'button';
-  row.className = 'drow';
-  row.dataset.openCalls = '';
-  row.innerHTML = `${PHONE_ICON}电话<span class="dmeta">${AGENT_LINE}</span>`;
-  resume.after(row);
-}
-
-function callsSheet(label, head, body) {
-  let el = document.getElementById('callsSheet');
-  if (!el) {
-    el = document.createElement('div');
-    el.id = 'callsSheet';
-    el.className = 'sheet';
-    el.addEventListener('click', (e) => { if (e.target === el || e.target.closest('[data-close-sheet]')) closeCalls(); });
-    document.body.append(el);
-  }
-  el.innerHTML = `<div class="sheetbody" role="dialog" aria-label="${label}"><header class="sheethead">${head}`
-    + `<button type="button" class="sheetclose" data-close-sheet aria-label="关闭">×</button></header>${body}</div>`;
-  el.hidden = false;
-}
+// ---------- 喵团的电话（仿 Cue 的个人资料）：侧边栏「喵团档案 → 电话」点开是这一轮演示的通话记录，再点一通看详情和转写 ----------
 function openCalls() {
   document.getElementById('drawer').hidden = true; // 从侧边栏点进来的：先收起侧边栏
-  callsSheet('电话', '<strong>电话</strong>', callLogHtml(AGENT_LINE, R.calls));
+  openCallLog(R.calls);
 }
 function openCall(id) {
   const c = R.calls.find((x) => x.id === id);
-  if (!c) return;
-  callsSheet('通话详情', '<button type="button" class="sheetclose" data-open-calls aria-label="返回通话记录">‹</button><strong>通话详情</strong>',
-    callDetailHtml(c, AGENT_LINE));
+  if (c) openCallDetail(c);
 }
-function closeCalls() { const el = document.getElementById('callsSheet'); if (el) el.hidden = true; }
 
 // ---------- App 外通知：像聊天软件的消息通知，标题是这个聊天，内容就是那条消息 ----------
 let noticeEl = null;
@@ -696,7 +667,6 @@ export function start(a) {
   clean = p.get('clean') === '1';
   document.body.classList.toggle('mock-clean', clean);
   buildBar();
-  addPhoneRow();
   document.addEventListener('click', onClick);
   document.addEventListener('keydown', (e) => {
     if (e.target.closest?.('input, textarea, select') || e.metaKey || e.ctrlKey || e.altKey) return;

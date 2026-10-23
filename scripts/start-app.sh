@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# 启动喵团 App（:3210）。如果 ~/.hermes/.env 里配了 HTTP(S)_PROXY，图片代理会走它（取 twimg 等被墙图床）。
+# 启动喵团 App（:3210）。如果 agent-home/.env 里配了 HTTP(S)_PROXY，图片代理会走它（取 twimg 等被墙图床）。
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-if [ -f "$HOME/.hermes/.env" ] && [ -z "${HTTPS_PROXY:-}" ]; then
+if [ -f "$ROOT/agent-home/.env" ] && [ -z "${HTTPS_PROXY:-}" ]; then
   while IFS='=' read -r k v; do
     v="${v%\"}"; v="${v#\"}"
     export "$k=$v"
-  done < <(grep -E '^(HTTP_PROXY|HTTPS_PROXY)=' "$HOME/.hermes/.env")
+  done < <(grep -E '^(HTTP_PROXY|HTTPS_PROXY)=' "$ROOT/agent-home/.env")
 fi
 if [ -n "${HTTPS_PROXY:-}${HTTP_PROXY:-}" ]; then
   export NODE_USE_ENV_PROXY=1

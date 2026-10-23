@@ -16,7 +16,7 @@ import { chromium } from 'playwright-core';
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const PROFILE = process.env.SANDBOX_PROFILE || path.join(DIR, 'profile');
 const PORT = Number(process.env.SANDBOX_PORT || 8660);
-// X / Instagram / Weverse 在国内要走代理（scripts/start-sandbox.sh 从 ~/.hermes/.env 读 HTTPS_PROXY）；微博、B 站直连。
+// X / Instagram / Weverse 在国内要走代理（scripts/start-sandbox.sh 从 agent-home/.env 读 HTTPS_PROXY）；微博、B 站直连。
 const PROXY = process.env.SANDBOX_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '';
 // 国内站点直连（走代理常被断开，比如 .edu.cn）；深度搜索读网页时也一样。
 const DIRECT = ['cn', 'baidu.com', 'zhihu.com', 'qq.com', 'sohu.com', '163.com', 'douban.com', 'csdn.net', 'jianshu.com', 'bing.com',
@@ -1321,7 +1321,7 @@ const READERS = {
 };
 
 // JS 的 .slice() 按 UTF-16 截字符串，可能把 emoji 切成半个（孤立代理项 \ud83d）。
-// 执行 agent（Python）收到后存库时会 UnicodeEncodeError，整个任务被标成失败，所以出口统一清掉。
+// 清理不完整的 Unicode 字符，确保模型请求、JSON 与持久化内容均可正常编码。
 const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
 const cleanStrings = (_, v) => (typeof v === 'string' ? v.replace(LONE_SURROGATE, '') : v);
 

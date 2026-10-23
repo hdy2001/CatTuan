@@ -1,8 +1,0 @@
-name: site-builder
-version: 0.1.0
-description: 发布网页：执行 agent 做好的单页网站存到 hermes-home/sites/，用户在喵团 App 的内置浏览器里看
-author: CatTuan
-provides_tools:
-  - publish_site
-  - read_site
-  - check_site

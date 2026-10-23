@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 执行 agent 守护进程：给每个没停用的账号跑一个 Hermes gateway（各自的 HERMES_HOME、端口和 key，见 app/homes.mjs），
+// 执行 agent 守护进程：给每个没停用的账号跑一个 Pi gateway（沿用各自的数据目录、端口和 key，见 app/homes.mjs），
 // 挂了自动拉起（一启动就挂的退避 2s、4s … 最多 60s）；账号停用了就把它的 gateway 停掉。
 // 每 15 秒对一遍账号库，新邀请的人不用重启就会有 agent。
 // 线上由 systemd 的 cattuan-agents 管；本机由 scripts/start.sh 起。收到 SIGTERM / Ctrl+C 时先挨个停掉 gateway 再退出。
@@ -19,7 +19,7 @@ const log = (msg) => console.log(`[agents ${new Date().toLocaleTimeString('zh-CN
 
 function start(u) {
   const home = homeOf(u);
-  syncHome(home); // 模板里新加的插件、改过的喵团技能，重启 agent 时带上
+  syncHome(home); // 模板里改过的喵团技能，重启 agent 时带上
   const agent = ensureAgentEnv(home, u.agent_port);
   const out = fs.openSync(path.join(home, 'gateway.out'), 'a');
   // 端口和 key 只认这个人主目录的 .env：继承来的 API_SERVER_* 会盖掉它（大家挤到同一个端口上）
@@ -27,8 +27,8 @@ function start(u) {
   const child = spawn(START, [home], {
     stdio: ['ignore', out, out],
     env: {
-      ...inherited, HERMES_HOME: home,
-      CATTUAN_APP_URL: process.env.CATTUAN_APP_URL || `http://127.0.0.1:${PORT}`, // cattuan-bridge 把工具调用明细推给 App
+      ...inherited, CATTUAN_HOME: home, PI_HOME: home,
+      CATTUAN_APP_URL: process.env.CATTUAN_APP_URL || `http://127.0.0.1:${PORT}`, // phone_call 通过 App 执行授权过的外呼
       CATTUAN_SITES_URL: process.env.SITES_ORIGIN || process.env.CATTUAN_SITES_URL || 'http://localhost:3211', // publish_site 返回的网址
     },
   });
@@ -36,7 +36,7 @@ function start(u) {
   const p = procs.get(u.id) || { backoff: 2000 };
   Object.assign(p, { child, name: u.name, home, startedAt: Date.now(), stopping: false });
   procs.set(u.id, p);
-  log(`${u.name}：agent 启动（:${agent.port}，pid ${child.pid}）`);
+  log(`${u.name}：Pi agent 启动（:${agent.port}，pid ${child.pid}）`);
   child.on('exit', (code, sig) => {
     if (p.child !== child) return;
     p.child = null;

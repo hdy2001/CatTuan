@@ -1,6 +1,0 @@
-name: idol-photos
-version: 0.1.0
-description: 按关键词搜网上的公开图片（必应图片搜索，可按时间过滤）
-author: CatTuan
-provides_tools:
-  - idol_photo_search

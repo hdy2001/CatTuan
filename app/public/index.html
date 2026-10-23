@@ -60,17 +60,9 @@
       </form>
     </main>
 
+    <!-- 目标（仿 Muse Goals）：「正在盯」每行是勾选框（= 完成）、标题和一句最新状态；下面是「新建目标」 -->
     <main id="goalsView" class="view" hidden>
-      <div class="viewhead">
-        <div>
-          <div class="viewsub">喵团会一直替你盯着，有新进展就在聊天里告诉你</div>
-        </div>
-      </div>
-      <form id="goalForm" class="goalform">
-        <input id="goalInput" placeholder="比如：每天早上告诉我天气" autocomplete="off">
-        <button type="submit">添加</button>
-      </form>
-      <div id="goals" class="list"></div>
+      <div id="goals" class="glist"></div>
     </main>
 
     <main id="tasksView" class="view" hidden>
@@ -79,7 +71,8 @@
           <div class="viewsub">喵团派出去干活的执行 agent，关掉 App 也会继续</div>
         </div>
       </div>
-      <div id="tasks" class="list"></div>
+      <!-- 仿 Muse：每行是类别图标（生活 / 工作 / 编程 / 社交）、标题、一句最新动态和时间，按今天 / 昨天分组；点一行弹出详情 -->
+      <div id="tasks" class="tlist"></div>
     </main>
 
   </div>
@@ -178,6 +171,10 @@
         <button type="button" class="drow" data-open-viewer="resume">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3.5h7l4 4V20a.5.5 0 0 1-.5.5h-10A.5.5 0 0 1 7 20z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M14 3.5V8h4M10 12h5M10 15.5h5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>简历
         </button>
+        <!-- 喵团的电话（仿 Cue：agent 有自己的电话）：点开是通话记录，再点一通看详情和转写。不显示号码，统一写「美团专线」 -->
+        <button type="button" class="drow" data-open-calls>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 3.5h2.6l1.4 4.1-1.9 1.3a11.5 11.5 0 0 0 6.4 6.4l1.3-1.9 4.1 1.4v2.6a2 2 0 0 1-2.2 2A16.5 16.5 0 0 1 4.6 5.7a2 2 0 0 1 2-2.2z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>电话<span class="dmeta">美团专线</span>
+        </button>
         <div class="dsep"></div>
         <!-- 聊天记录不常用：可以折叠，默认收起；搜索时自动展开显示结果 -->
         <button type="button" id="histToggle" class="dhist" aria-expanded="false" aria-controls="chatsList">
@@ -188,6 +185,49 @@
         <!-- 当前账号：每个人的聊天、任务、目标、账本都是自己的 -->
         <div class="dme"><span>已登录</span><b id="meName"></b><em id="meRole" hidden>管理员</em><button type="button" data-logout>退出</button></div>
       </aside>
+    </div>
+  </div>
+
+  <!-- 目标详情（仿 Muse）：目标说明、ACTIVE（定时检查）、动态（按日期，检查的结论点开看那次检查的轨迹）；··· 里是现在检查 / 暂停 / 完成 / 删除 -->
+  <div id="goalSheet" class="sheet tsheet" hidden>
+    <div class="tsbody" role="dialog" aria-modal="true" aria-labelledby="gsTitle" tabindex="-1">
+      <div class="tsgrab" aria-hidden="true"></div>
+      <button type="button" class="tsclose tsmenubtn" data-goal-menu aria-label="更多操作" aria-haspopup="menu" aria-expanded="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="12" r="1.6" fill="currentColor"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/><circle cx="18" cy="12" r="1.6" fill="currentColor"/></svg>
+      </button>
+      <button type="button" class="tsclose" data-close-goal aria-label="关闭">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+      <div id="goalMenu" class="gmenu" role="menu" hidden></div>
+      <div id="goalDetail" class="tsscroll"></div>
+    </div>
+  </div>
+
+  <!-- 新建目标：一句话说想盯什么，下面是这一类的例子（点一下填进去） -->
+  <div id="goalNewSheet" class="sheet" hidden>
+    <div class="sheetbody" role="dialog" aria-labelledby="gnTitle">
+      <header class="sheethead">
+        <strong id="gnTitle">新建目标</strong>
+        <button type="button" class="sheetclose" data-close-sheet aria-label="关闭">×</button>
+      </header>
+      <form id="goalNewForm" class="gnform">
+        <textarea id="goalNewInput" rows="3" placeholder="想让喵团一直帮你盯着什么？说清楚盯什么、多久看一次"></textarea>
+        <div id="goalNewIdeas" class="gnideas"></div>
+        <button type="submit" class="gnsubmit">开始盯</button>
+      </form>
+      <div class="accsub">建好后喵团先查一次，以后按你说的频率接着查，有新进展才在聊天里告诉你。</div>
+    </div>
+  </div>
+
+  <!-- 后台任务详情（仿 Muse）：状态、标题、最新动态，下面是 MAIN（喵团）和 SUBAGENT（执行 agent 每一轮）的轨迹；往下拖或点 ✕ 关掉 -->
+  <div id="taskSheet" class="sheet tsheet" hidden>
+    <div class="tsbody" role="dialog" aria-modal="true" aria-labelledby="tsTitle" tabindex="-1">
+      <div class="tsgrab" aria-hidden="true"></div>
+      <button type="button" class="tsclose" data-close-task aria-label="关闭">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 6.5l11 11M17.5 6.5l-11 11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+      <div id="taskDetail" class="tsscroll"></div>
+      <div id="taskFoot" class="tsfoot" hidden></div>
     </div>
   </div>
 
