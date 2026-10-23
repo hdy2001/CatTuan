@@ -1949,6 +1949,12 @@ function cookieToken(req) {
   return '';
 }
 
+// 登录会话的 token：原生 App 放在 Authorization: Bearer 里，网页用 cookie。两种查的是同一张会话表，退出、停用、重置密码一样作废。
+function authToken(req) {
+  const m = /^Bearer\s+(\S+)$/i.exec(String(req.headers.authorization || '').trim());
+  return m ? m[1] : cookieToken(req);
+}
+
 // 真实的客户端 IP：在 Caddy 后面时请求都来自本机，用它加的 X-Forwarded-For（最后一个是 Caddy 看到的地址）
 function clientIp(req) {
   const peer = req.socket.remoteAddress || '';
@@ -1968,42 +1974,45 @@ function loginFailed(keys) {
 }
 setInterval(() => { for (const [k, f] of loginFails) if (Date.now() - f.at > LOCK_MS) loginFails.delete(k); }, 600_000).unref();
 
-function startSession(req, res, user) {
+// asToken：原生 App 登录（请求体带 "token": true）：token 放在响应里给它自己存，不下发 cookie
+function startSession(req, res, user, asToken = false) {
   loadUser(user);
-  res.setHeader('Set-Cookie', sessionCookie(accounts.createSession(user.id, { ip: clientIp(req), ua: req.headers['user-agent'] })));
+  const token = accounts.createSession(user.id, { ip: clientIp(req), ua: req.headers['user-agent'] });
+  if (asToken) return sendJson(res, 200, { ok: true, name: user.name, role: user.role, token });
+  res.setHeader('Set-Cookie', sessionCookie(token));
   return sendJson(res, 200, { ok: true, name: user.name });
 }
 
 async function authRoute(req, res, url) {
   if (url.pathname === '/api/auth/login' && req.method === 'POST') {
-    const { name = '', password = '' } = await readBody(req);
+    const { name = '', password = '', token: asToken = false } = await readBody(req);
     const keys = [`ip:${clientIp(req)}`, `name:${String(name).trim().toLowerCase()}`];
     if (loginLocked(keys)) return sendJson(res, 429, { error: '试错太多次了，15 分钟后再试' });
     const user = await accounts.verifyPassword(name, password);
     if (!user) { loginFailed(keys); return sendJson(res, 401, { error: '名字或密码不对' }); }
     for (const k of keys) loginFails.delete(k);
-    return startSession(req, res, user);
+    return startSession(req, res, user, asToken === true);
   }
   if (url.pathname === '/api/auth/logout' && req.method === 'POST') {
-    accounts.deleteSession(cookieToken(req));
+    accounts.deleteSession(authToken(req));
     res.setHeader('Set-Cookie', sessionCookie('', 0));
     return sendJson(res, 200, { ok: true });
   }
   // 现在是谁：没登录 / 过期了是 401（App 的实时连接断了会来问一下，401 就回登录页）
   if (url.pathname === '/api/auth/me') {
-    const me = accounts.sessionUser(cookieToken(req));
+    const me = accounts.sessionUser(authToken(req));
     return me ? sendJson(res, 200, { name: me.name, role: me.role }) : sendJson(res, 401, { error: '请先登录' });
   }
   // 邀请链接（邀请码在链接的 # 后面，不会出现在任何请求地址和日志里）：只带 code 是先看是谁的邀请；带上 password 是设密码、激活并登录
   if (url.pathname === '/api/auth/invite' && req.method === 'POST') {
-    const { code = '', password } = await readBody(req);
+    const { code = '', password, token: asToken = false } = await readBody(req);
     if (password === undefined) {
       const inv = accounts.peekInvite(code);
       return inv ? sendJson(res, 200, { name: inv.name, reset: inv.status === 'active' }) : sendJson(res, 404, { error: '邀请链接无效或已过期，找管理员重新发一个' });
     }
     let user;
     try { user = await accounts.acceptInvite(code, password); } catch (e) { return sendJson(res, 400, { error: e.message }); }
-    return startSession(req, res, user);
+    return startSession(req, res, user, asToken === true);
   }
   return sendJson(res, 404, { error: 'not found' });
 }
@@ -2044,7 +2053,7 @@ const server = http.createServer(async (req, res) => {
     if (PUBLIC_FILES.has(url.pathname)) return serveFile(res, path.join(PUBLIC_DIR, url.pathname));
 
     // ---- 下面都要登录：每个接口只碰这个人自己的数据，拿别人的 id 来查一律 404 ----
-    const me = accounts.sessionUser(cookieToken(req));
+    const me = accounts.sessionUser(authToken(req));
     if (!me) {
       if (url.pathname.startsWith('/api/')) return sendJson(res, 401, { error: '请先登录' });
       res.writeHead(302, { Location: '/login' });
