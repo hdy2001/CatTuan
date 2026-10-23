@@ -46,7 +46,7 @@ npm ci --prefix sandbox
 # 首次配置：仅在 agent-home/.env 不存在时复制并填写模型凭据
 test -f agent-home/.env || cp agent-home/.env.example agent-home/.env
 # 首次建管理员；已有账号的环境无需重复执行
-node scripts/user.mjs invite <名字> --admin
+node scripts/user.mjs add <名字> --admin
 
 # 前台启动全部服务，Ctrl+C 停止
 scripts/start.sh
@@ -69,12 +69,12 @@ curl --fail --silent --show-error http://127.0.0.1:8650/health
 
 - 默认 App 地址 `http://localhost:3210`，浏览器服务 `:8660`。模板 gateway 默认 `:8650`，其他账号使用各自 `.env` 中的端口。
 - App 健康响应的 `executorRuntime` 应为 `pi`；gateway 的 `runtime` 应为 `pi`。健康响应只证明服务状态，不能替代实际任务链路测试。
-- 关键配置：`LONGCAT_API_KEY`、`PI_MODEL`、`PI_API_URL`、`PI_API_KEY`、`PI_MAX_TURNS`、`CATTUAN_DATA_DIR`、`CATTUAN_HOME`、`PI_HOME`；每个账号有独立的 `API_SERVER_PORT` 与 `API_SERVER_KEY`。示例见 `agent-home/.env.example` 和 `deploy/cattuan.env.example`。
+- 关键配置：`LONGCAT_API_KEY`、`PI_MODEL`、`PI_API_URL`、`PI_API_KEY`、`PI_MAX_TURNS`、`CATTUAN_DATA_DIR`、`CATTUAN_HOME`、`PI_HOME`；每个账号有独立的 `API_SERVER_PORT` 与 `API_SERVER_KEY`。示例见 `agent-home/.env.example`；线上配置是 `deploy/setup.sh` 生成的 `/etc/cattuan.env`。
 - 本地日志通常为 `app/data/server.out`、`app/data/agents.out`、`sandbox/server.out`，App 数据目录可由 `CATTUAN_DATA_DIR` 覆盖；查看时注意隐藏凭据和用户内容。
 
 ## 修改与验收
 
-- 开始前检查 `git status --short` 和当前分支，保留已有未提交修改。只在用户要求时提交或推送；在默认分支上需要提交时先新建分支，分支名用 `<agent 名>/<改动简述>`（如 `codex/slim-chat`、`claude/slim-chat`），拿不准分支名就先问用户。不要擅自清理其他工作的分支、文件或改动。
+- 保留已有未提交修改，不要擅自清理其他工作的分支、文件或改动。
 - 遵循现有代码风格。小改动保持范围集中；接口、配置或运行方式变更同步 README 和相关部署说明。
 - 运行与改动相关的测试。运行时、工具、鉴权、迁移等重要改动应验证成功路径与失败路径；不通过删除断言、隐藏异常或跳过失败用例来获得通过结果。
 - 执行链路重点检查：真实 Pi SDK 到模拟模型和工具的往返、会话恢复、SSE 重连、停止/插话、工具禁用，以及用户数据隔离。
