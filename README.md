@@ -73,6 +73,7 @@ scripts/start.sh                     # sandbox :8660 + 每个账号一个 agent�
 小范围给同事用，部署到服务器见 [deploy/README.md](deploy/README.md)。
 
 - **账号**：只能邀请，不开放注册。管理员 `node scripts/user.mjs invite 小王` 发一个 7 天有效、只能用一次的链接，同事打开后自己设密码。再发一次等于重置密码；`disable` 立刻下线、停掉他的 agent，数据保留。密码用 scrypt 加盐，登录会话的 token 在库里只存哈希。
+- **鉴权**：网页用 HttpOnly cookie。原生 App 登录时在请求体里加 `"token": true`（`/api/auth/login`、`/api/auth/invite` 都支持），响应里返回 `token`、不下发 cookie，之后每个请求（包括 SSE `/api/events`、图片 `/api/uploads/…`）带 `Authorization: Bearer <token>`。两种是同一张会话表：30 天有效、用着自动续期，`/api/auth/logout`、`disable`、重置密码都会让它作废。
 - **隔离**：每个人的聊天、任务、目标、上传的图、回放分开存，实时推送（SSE）只推给本人，拿别人的 id 调接口一律 404。
 - **执行 agent 每人一个**：每人一个 Pi gateway 和独立数据主目录，记忆、Pi 会话分开。业务工具直接在 Node 进程内运行，以 `CATTUAN_HOME` / `PI_HOME` 定位数据，无额外 agent 框架或 Python 环境。
 - **沙箱浏览器大家共用**：实时画面按任务编号（工具从任务会话 id 取）只推给任务的主人；猜不准是谁的就不显示。
