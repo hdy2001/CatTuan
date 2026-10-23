@@ -11,23 +11,20 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body class="authpage">
-  <!-- 登录 / 邀请设密码。只能邀请，不开放注册：邀请链接是 /login#invite=<邀请码>（码在 # 后面，不会出现在请求地址和日志里） -->
+  <!-- 登录：名字 + 密码。账号由管理员用 scripts/user.mjs 开通（调试用的注册接口是 /api/auth/register，页面上不放入口） -->
   <main class="auth">
     <div class="authbrand"><img src="longcat-icon.svg" alt=""><b>喵团</b></div>
     <p id="authSub" class="authsub">LongCat 个人助理</p>
     <form id="authForm" class="authform" novalidate>
-      <label id="nameRow">名字<input id="name" name="username" autocomplete="username" maxlength="20" required></label>
+      <label>名字<input id="name" name="username" autocomplete="username" maxlength="20" required></label>
       <label>密码<input id="password" name="password" type="password" autocomplete="current-password" required></label>
-      <label id="confirmRow" hidden>再输一遍<input id="confirm" type="password" autocomplete="new-password"></label>
       <p id="authErr" class="autherr" role="alert" hidden></p>
       <button id="authBtn" type="submit">登录</button>
     </form>
-    <p id="authNote" class="authnote">账号由管理员邀请开通；忘了密码，找管理员重新发一个邀请链接。</p>
+    <p id="authNote" class="authnote">账号由管理员开通；忘了密码，找管理员重置。</p>
   </main>
   <script>
     const $ = (s) => document.querySelector(s);
-    const invite = new URLSearchParams(location.hash.slice(1)).get('invite');
-    window.addEventListener('hashchange', () => location.reload()); // 在已打开的登录页里粘贴邀请链接：只变了 # 后面，页面不会自己刷新
     const err = (msg) => { $('#authErr').textContent = msg || ''; $('#authErr').hidden = !msg; };
     async function post(url, body) {
       const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -36,33 +33,17 @@
       return d;
     }
 
-    if (invite) {
-      // 邀请链接：先看是谁的邀请，再让他设密码（名字填进隐藏的输入框，浏览器记密码时能带上）
-      $('#nameRow').hidden = true;
-      $('#confirmRow').hidden = false;
-      $('#password').autocomplete = 'new-password';
-      $('#authBtn').textContent = '设好密码，进入喵团';
-      $('#authNote').textContent = '密码至少 8 位。以后用名字和这个密码登录。';
-      post('/api/auth/invite', { code: invite }).then((d) => {
-        $('#authSub').textContent = d.reset ? `${d.name}，重新设一个密码` : `欢迎 ${d.name}，设个密码就能用了`;
-        $('#name').value = d.name;
-      }).catch((e) => { err(e.message); $('#authBtn').disabled = true; });
-    } else {
-      // 已经登录了就直接进 App
-      fetch('/api/auth/me').then((r) => { if (r.ok) location.replace('/'); }).catch(() => {});
-    }
+    // 已经登录了就直接进 App
+    fetch('/api/auth/me').then((r) => { if (r.ok) location.replace('/'); }).catch(() => {});
 
     $('#authForm').addEventListener('submit', async (e) => {
       e.preventDefault();
       err('');
       const password = $('#password').value;
-      if (invite && password !== $('#confirm').value) return err('两次输入的密码不一样');
-      if (!invite && (!$('#name').value.trim() || !password)) return err('名字和密码都要填');
+      if (!$('#name').value.trim() || !password) return err('名字和密码都要填');
       $('#authBtn').disabled = true;
       try {
-        if (invite) await post('/api/auth/invite', { code: invite, password });
-        else await post('/api/auth/login', { name: $('#name').value.trim(), password });
-        history.replaceState(null, '', '/login'); // 邀请码别留在地址栏和历史记录里
+        await post('/api/auth/login', { name: $('#name').value.trim(), password });
         location.replace('/');
       } catch (e2) {
         err(e2.message);

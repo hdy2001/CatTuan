@@ -60,6 +60,14 @@ export function syncHome(home) {
   if (!fs.existsSync(path.join(home, 'config.yaml'))) fs.copyFileSync(path.join(TEMPLATE, 'config.yaml'), path.join(home, 'config.yaml'));
 }
 
+// 新账号的主目录建账号时就建好：agent 守护进程几秒内就会把他的 agent 拉起来，等他登录时已经热了
+export function provision(user) {
+  const home = homeOf(user);
+  syncHome(home);
+  ensureAgentEnv(home, user.agent_port);
+  fs.mkdirSync(path.join(userDir(user.id), 'uploads'), { recursive: true });
+}
+
 // 第一次给这个人分配 agent 的端口和 key（已经有了就沿用）
 export function ensureAgentEnv(home, port) {
   const file = path.join(home, '.env');

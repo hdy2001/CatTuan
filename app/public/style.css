@@ -159,7 +159,6 @@ textarea:focus { border-color: var(--accent); }
 .fromtask:hover { color: var(--accent-strong); }
 .spin { width: 9px; height: 9px; flex: none; border-radius: 50%; border: 2px solid var(--accent); border-top-color: transparent; animation: spin .8s linear infinite; display: inline-block; }
 
-.alink { align-self: flex-start; padding: 2px 0; color: var(--accent-strong); font-size: 12px; text-decoration: none; } /* 任务详情底下的「轨迹 ›」（Langfuse） */
 .brief { white-space: pre-wrap; margin-top: 6px; padding: 8px 10px; background: var(--bg); border-radius: 10px; }
 
 /* ---- 输入区：微信式「+」与工具面板 ---- */
@@ -629,7 +628,7 @@ body:not(.mock-clean):has(.mockbar) #messages { padding-bottom: 150px; }
 .demobanner em { flex: none; font-style: normal; font-size: 13px; font-weight: 600; color: var(--accent-strong); }
 body.mock-clean .demobanner { display: none; }
 
-/* ---- 登录页 / 用邀请链接设密码（login.html） ---- */
+/* ---- 登录页（login.html） ---- */
 .authpage { display: grid; place-items: center; min-height: 100dvh; padding: 24px 16px; background: var(--hero), var(--bg); }
 .auth { width: min(360px, 100%); padding: 28px 24px 22px; border: 1px solid var(--line); border-radius: 20px; background: var(--panel); box-shadow: var(--shadow); }
 .authbrand { display: flex; align-items: center; justify-content: center; gap: 10px; }
@@ -719,7 +718,6 @@ body.mock-clean .demobanner { display: none; }
 .tsscroll { flex: 1; min-height: 0; margin-top: 20px; overflow-y: auto; overscroll-behavior: contain; padding: 0 22px 28px; } /* 顶上 20px 留给小横条，内容滚上去不压着它 */
 .tsfoot { flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 22px max(12px, env(safe-area-inset-bottom)); border-top: 1px solid var(--line); background: var(--panel); }
 .tsfoot[hidden] { display: none; }
-.tsfoot .alink { margin-left: auto; align-self: center; }
 .tsbtn { border: 1px solid var(--line); border-radius: 99px; padding: 8px 16px; background: var(--panel); color: var(--ink); font-size: 14px; font-weight: 600; cursor: pointer; }
 .tsbtn:hover { border-color: var(--accent); }
 .tsbtn.primary { border-color: transparent; background: var(--accent-grad); color: #fff; box-shadow: var(--accent-shadow); }

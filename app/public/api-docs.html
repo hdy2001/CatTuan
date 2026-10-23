@@ -191,13 +191,13 @@ for try await line in bytes.lines where line.hasPrefix("data:") {
 <pre><code>// 带着 Bearer token 或 cookie 调用：200 {"ok":true}，这个会话（token）立刻作废
 // 只作废当前这一个，同一账号在别的设备上的登录不受影响</code></pre></div>
 
-<div class="ep"><h3><span class="m POST">POST</span><code>/api/auth/invite</code></h3>
-<p>邀请链接 <code>/login#invite=&lt;code&gt;</code> 激活账号用（链接由管理员用 <code>node scripts/user.mjs invite &lt;名字&gt;</code> 生成）。</p>
-<pre><code>// 只带 code：先看是谁的邀请
-{ "code": "..." }                      → { "name": "按钮测试", "reset": true }   // reset=true 表示重置密码
-// 带上 password：设密码 + 激活 + 直接登录（Set-Cookie）；再加 "token": true 则和登录接口一样返回 token
-{ "code": "...", "password": "..." }   → { "ok": true, "name": "按钮测试" }
-// 404 邀请无效或过期；400 密码不合规（error 里有原因）</code></pre></div>
+<div class="ep"><h3><span class="m POST">POST</span><code>/api/auth/register</code> <span class="tag">调试用</span></h3>
+<p>注册一个<b>成员</b>账号并直接登录（管理员账号只能用 <code>node scripts/user.mjs add &lt;名字&gt; --admin</code> 建）。本机（<code>PUBLIC_ORIGIN</code> 不是 https）默认开；线上默认关、返回 404，要用时给 App 设 <code>ALLOW_REGISTER=1</code>。</p>
+<pre><code>// 请求：和登录一样，加 "token": true 拿 Bearer token，不加则 Set-Cookie
+{ "name": "按钮测试2", "password": "至少 8 位", "token": true }
+// 200 { "ok": true, "name": "按钮测试2", "role": "member", "token": "…" }
+// 400 名字不合规 / 重名 / 密码太短（error 里有原因）
+// 429 同一 IP 15 分钟内注册满 10 个   404 没开注册</code></pre></div>
 
 <h2 id="chat">聊天接口</h2>
 
@@ -209,8 +209,7 @@ for try await line in bytes.lines where line.hasPrefix("data:") {
   "chats": [Chat, …],           // 最近更新的在前
   "tasks": [Task, …],           // 所有聊天共用，最近 50 个
   "activity": [Activity, …],    // 正在进行的事
-  "goals": […],
-  "traceBase": null             // 仅管理员有值
+  "goals": […]
 }</code></pre></div>
 
 <div class="ep"><h3><span class="m POST">POST</span><code>/api/message</code> <span class="tag">核心</span></h3>
@@ -356,7 +355,7 @@ for try await line in bytes.lines where line.hasPrefix("data:") {
 <p>2026-10-23，在本机 :3210 上用测试账号「按钮测试」（成员）跑，执行层用 Pi，模型是 LongCat-2.5-Preview。</p>
 <table>
 <tr><th>场景</th><th>结果</th></tr>
-<tr><td>邀请链接查询 / 设密码激活</td><td class="pass">通过</td></tr>
+<tr><td>注册（调试用）：成员账号 + 直接登录（cookie / token）；重名、密码太短、名字不合规 400；请求体里的 role 被忽略；同一 IP 第 11 个 429；HTTPS 下默认 404，ALLOW_REGISTER=1 打开</td><td class="pass">通过</td></tr>
 <tr><td>登录成功（Set-Cookie）/ 密码错 401 / 未登录访问 401</td><td class="pass">通过</td></tr>
 <tr><td>Origin 不对的写请求 403</td><td class="pass">通过</td></tr>
 <tr><td>SSE 连接、hello、未登录 401</td><td class="pass">通过</td></tr>
@@ -369,7 +368,7 @@ for try await line in bytes.lines where line.hasPrefix("data:") {
 <tr><td>带图消息：图片存成 /api/uploads/…，能带 cookie 取回（8×8 的测试图太小，识别任务按预期失败，并把失败转述回聊天）</td><td class="pass">通过</td></tr>
 <tr><td>聊天搜索、新建、切换、删除；删除不存在的聊天 404</td><td class="pass">通过</td></tr>
 <tr><td>退出登录后会话作废 401</td><td class="pass">通过</td></tr>
-<tr><td>Bearer token：登录 / 邀请激活拿 token（不下发 cookie）；用 token 调 me、state、SSE、发消息、取图片；token 错 401；scheme 大小写不敏感；退出后 token 401、同账号 cookie 会话不受影响；停用账号后 token 立刻 401；<code>"token"</code> 不是 <code>true</code> 时仍走 cookie</td><td class="pass">通过</td></tr>
+<tr><td>Bearer token：登录 / 注册拿 token（不下发 cookie）；用 token 调 me、state、SSE、发消息、取图片；token 错 401；scheme 大小写不敏感；退出后 token 401、同账号 cookie 会话不受影响；停用账号后 token 立刻 401；<code>"token"</code> 不是 <code>true</code> 时仍走 cookie</td><td class="pass">通过</td></tr>
 <tr><td>App 自带测试 <code>npm test --prefix app</code></td><td class="pass">26/26 通过</td></tr>
 </table>
 

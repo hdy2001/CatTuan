@@ -4,7 +4,7 @@ import { recordToolEvent } from './pi-events.mjs';
 //   执行 agent（executor）：Pi SDK（搜索 / 读网页 / 搜图 / 识图 / 打电话 / 记忆工具），在后台跑，App 关了也继续。
 //   任务完成后，调度者把结果转成聊天消息发回来；聊天、任务、目标都存在服务端，经 SSE 推给 App。
 //   目标（goal，仿 Muse Goal）：持续运行、定期检查的后台目标，有新进展才在聊天里说，目标列表显示最新状态。
-//   多人：账号见 app/accounts.mjs（只能邀请，scripts/user.mjs 管）；每个人的聊天、任务、目标存在 <数据目录>/users/<id>/，
+//   多人：账号见 app/accounts.mjs（名字 + 密码登录，scripts/user.mjs 管）；每个人的聊天、任务、目标存在 <数据目录>/users/<id>/，
 //   执行 agent 每人一个（沿用各自的 CATTUAN_HOME 数据路径，见 app/homes.mjs，由 scripts/agents.mjs 守护）；沙箱浏览器大家共用。
 // BFF 本身只用 Node 内置库；Pi SDK 在独立 gateway 中运行。
 import http from 'node:http';
@@ -14,18 +14,17 @@ import path from 'node:path';
 import dns from 'node:dns/promises';
 import net from 'node:net';
 import crypto from 'node:crypto';
-import { AsyncLocalStorage } from 'node:async_hooks';
 import { Readable } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 import { openAccounts } from './accounts.mjs';
-import { TEMPLATE, dataDir, userDir, homeOf, agentOf, readEnvFile } from './homes.mjs';
+import { TEMPLATE, dataDir, userDir, homeOf, agentOf, readEnvFile, provision } from './homes.mjs';
 import { placeCall, listCalls, CALL_LINE } from './calls.mjs';
 
 const APP_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(APP_DIR, 'public');
 const DATA_DIR = dataDir(); // CATTUAN_DATA_DIR，默认 app/data
 
-// 仓库的 agent-home/.env：大家共用的 LongCat key、Langfuse 的 key（每个人 agent 自己的端口和 key 在各自主目录的 .env）
+// 仓库的 agent-home/.env：大家共用的 LongCat key（每个人 agent 自己的端口和 key 在各自主目录的 .env）
 const agentEnv = readEnvFile(path.join(TEMPLATE, '.env'));
 const LONGCAT_KEY = process.env.LONGCAT_API_KEY || agentEnv.LONGCAT_API_KEY;
 const LONGCAT_URL = 'https://api.longcat.chat/openai/v1/chat/completions';
@@ -157,143 +156,13 @@ function broadcast(u, ev) {
 }
 const watching = () => [...users.values()].some((u) => u.clients.size > 0); // 有没有人开着 App：决定沙箱推不推连续画面
 
-// ---------- 轨迹（Langfuse，调试用）：agent-home/.env 里有 CATTUAN_LANGFUSE_* 才开（scripts/start-langfuse.sh 会写上） ----------
-// 调度者做的每件事（回消息、转述结果、推目标进展、建目标）是一条 trace：每次 LongCat 调用一个 generation，
-// 每一步一个 event，调度结果（模型原始输出 → App 兜底改写后的决定）一个 event。后台任务每一轮在 App 这边也记一条：
-// 发给执行 agent 的完整任务说明、结局、出错原因。和任务有关的都记在 task-<任务 id>。
-// 当前采集 BFF 的调度和任务生命周期；Pi 内部模型调用可按需扩展。
-// 和任务无关的聊天记在 chat-<聊天 id>。用 OTLP/HTTP JSON 直接发（零依赖）；Langfuse 没开、发送失败都只丢轨迹，不影响 App。
-const LF_URL = (agentEnv.CATTUAN_LANGFUSE_BASE_URL || 'https://cloud.langfuse.com').replace(/\/+$/, '');
-const LF_AUTH = agentEnv.CATTUAN_LANGFUSE_PUBLIC_KEY && agentEnv.CATTUAN_LANGFUSE_SECRET_KEY
-  ? `Basic ${Buffer.from(`${agentEnv.CATTUAN_LANGFUSE_PUBLIC_KEY}:${agentEnv.CATTUAN_LANGFUSE_SECRET_KEY}`).toString('base64')}` : '';
-const ACT_LABEL = { message: '回消息', deliver: '转述结果', goal: '目标' };
-const traceCtx = new AsyncLocalStorage(); // 当前在做哪件事：longcat() 据此把调用记到那条 trace 下
-const lfOpen = new Map(); // 还没做完的事：这件事的 id → { act, traceId, rootId, start, input, spans }
-const lfQueue = [];
-let lfTimer = null;
-let lfWarnedAt = 0;
-let lfProject = null;
-let lfProjectAskedAt = 0;
-const hex = (bytes) => crypto.randomBytes(bytes).toString('hex');
-const nanos = (ms) => String(BigInt(Math.round(ms)) * 1_000_000n);
-
-function otelValue(v) {
-  if (typeof v === 'boolean') return { boolValue: v };
-  if (Number.isInteger(v)) return { intValue: String(v) };
-  if (typeof v === 'number') return { doubleValue: v };
-  if (Array.isArray(v) && v.every((x) => typeof x === 'string')) return { arrayValue: { values: v.map((x) => ({ stringValue: x })) } };
-  return { stringValue: (typeof v === 'string' ? v : JSON.stringify(v)).slice(0, 50_000) };
-}
-
-// 同一条 trace 的每个 span 都带上 trace 名、会话、标签和是谁（Langfuse v4 按 observation 聚合；Users 页能按人看）
-const traceAttrs = (name, session, tags, user) => ({ 'langfuse.trace.name': name, 'langfuse.session.id': session, 'langfuse.trace.tags': ['cattuan', ...tags], 'langfuse.user.id': user });
-
-function lfSpan({ traceId, spanId = hex(8), parentId, name, start, end, attrs }) {
-  if (!LF_AUTH) return;
-  lfQueue.push({
-    traceId, spanId, ...(parentId && { parentSpanId: parentId }), name: String(name || '').slice(0, 200), kind: 1,
-    startTimeUnixNano: nanos(start), endTimeUnixNano: nanos(end ?? start),
-    attributes: Object.entries(attrs).filter(([, v]) => v != null && v !== '').map(([key, v]) => ({ key, value: otelValue(v) })),
-  });
-  lfTimer ||= setTimeout(lfFlush, 1000);
-}
-
-// 攒一秒发一批
-async function lfFlush() {
-  lfTimer = null;
-  const spans = lfQueue.splice(0, 200);
-  if (lfQueue.length) lfTimer = setTimeout(lfFlush, 1000);
-  try {
-    const r = await fetch(`${LF_URL}/api/public/otel/v1/traces`, {
-      method: 'POST',
-      headers: { Authorization: LF_AUTH, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ resourceSpans: [{
-        resource: { attributes: [{ key: 'service.name', value: { stringValue: 'cattuan-app' } }] },
-        scopeSpans: [{ scope: { name: 'cattuan-dispatcher' }, spans }],
-      }] }, cleanStrings),
-      signal: AbortSignal.timeout(10_000),
-    });
-    if (!r.ok) throw new Error(`${r.status} ${(await r.text()).slice(0, 200)}`);
-  } catch (e) {
-    if (Date.now() - lfWarnedAt > 60_000) { lfWarnedAt = Date.now(); console.error('[langfuse] 轨迹没发出去：', e.message); }
-  }
-}
-
-// 一件事开始：建 trace。子 span 先攒着，做完时一起发（派了任务、改了任务之后才知道该记到哪个会话）。
-function lfStart(a, input) {
-  if (!LF_AUTH) return;
-  lfOpen.set(a.id, { act: a, traceId: hex(16), rootId: hex(8), start: Date.now(), input, spans: [] });
-}
-
-function lfChild(a, span) {
-  const o = a && lfOpen.get(a.id);
-  if (o) o.spans.push({ ...span, traceId: o.traceId, parentId: o.rootId });
-  else lfSpan({ ...span, traceId: hex(16), attrs: { ...traceAttrs(`调度者 · ${span.name}`, '', ['standalone']), ...span.attrs } });
-}
-
-const lfEvent = (a, name, attrs = {}) => lfChild(a, { name, start: Date.now(), attrs: { 'langfuse.observation.type': 'event', ...attrs } });
-
-function lfEnd(a) {
-  const o = lfOpen.get(a.id);
-  if (!o) return;
-  lfOpen.delete(a.id);
-  const session = a.taskId ? `task-${a.taskId}` : a.chatId || a.replyIn ? `chat-${a.chatId || a.replyIn}` : a.goalId ? `goal-${a.goalId}` : '';
-  const common = traceAttrs(`调度者 · ${ACT_LABEL[a.kind] || a.kind}`, session, [`kind:${a.kind}`], U(a)?.name);
-  for (const s of o.spans) lfSpan({ ...s, attrs: { ...common, ...s.attrs } });
-  lfSpan({ traceId: o.traceId, spanId: o.rootId, name: a.title, start: o.start, end: Date.now(), attrs: {
-    ...common, 'langfuse.observation.type': 'agent',
-    'langfuse.trace.input': o.input, 'langfuse.observation.input': o.input,
-    'langfuse.trace.output': a.outcome, 'langfuse.observation.output': a.outcome,
-    ...(a.status === 'failed' && { 'langfuse.observation.level': 'ERROR', 'langfuse.observation.status_message': a.outcome }),
-    'langfuse.trace.metadata.activity_id': a.id, 'langfuse.trace.metadata.task_id': a.taskId,
-    'langfuse.trace.metadata.goal_id': a.goalId, 'langfuse.trace.metadata.chat_id': a.chatId || a.replyIn,
-  } });
-}
-
-// 一直没做完的事（中途抛错没走到 endActivity）：5 分钟后也把攒下的发出去，这种往往正是要查的
-setInterval(() => {
-  for (const o of lfOpen.values()) if (Date.now() - o.start > 300_000) lfEnd({ ...o.act, status: 'failed', outcome: '这件事一直没做完' });
-}, 60_000).unref();
-
-// 后台任务的一轮（App 这边看到的）：发给执行 agent 的说明、结局。工具执行细节由 Pi 事件流显示在任务轨迹里。
-function lfRound(t, { prompt, round, runId, steps, r }) {
-  if (!LF_AUTH) return;
-  t.traced = true; // 开轨迹之前建的任务，改了一轮以后也有轨迹了
-  const outcome = r.lost ? 'lost' : t.status === 'queued' ? 'revised' : t.status;
-  const note = { lost: 'agent 重启过，这一轮没了，重新排队', revised: '中途的修改没赶上，接着改下一轮', stopped: '停了' }[outcome];
-  const output = r.error || r.text || note || '';
-  lfSpan({ traceId: hex(16), name: `${t.title} · 第 ${round} 轮`, start: Date.parse(t.startedAt) || Date.now(), end: Date.now(), attrs: {
-    ...traceAttrs('后台任务 · App 侧', `task-${t.id}`, [`task:${t.kind}`, `outcome:${outcome}`], U(t)?.name),
-    'langfuse.observation.type': 'agent',
-    'langfuse.trace.input': prompt, 'langfuse.observation.input': prompt,
-    'langfuse.trace.output': output, 'langfuse.observation.output': output,
-    ...(outcome !== 'done' && { 'langfuse.observation.level': outcome === 'failed' ? 'ERROR' : 'WARNING', 'langfuse.observation.status_message': r.error || note }),
-    'langfuse.trace.metadata.task_id': t.id, 'langfuse.trace.metadata.round': round, 'langfuse.trace.metadata.run_id': runId,
-    'langfuse.trace.metadata.goal_id': t.goalId, 'langfuse.trace.metadata.steps': steps,
-  } });
-}
-
-// App 里「轨迹」链接的前缀：要 Langfuse 项目 id，问一次（Langfuse 还没起来就过一分钟再问）
-function traceBase() {
-  if (!LF_AUTH) return null;
-  if (!lfProject && Date.now() - lfProjectAskedAt > 60_000) {
-    lfProjectAskedAt = Date.now();
-    fetch(`${LF_URL}/api/public/projects`, { headers: { Authorization: LF_AUTH }, signal: AbortSignal.timeout(5_000) })
-      .then((r) => r.json()).then((j) => { lfProject = j.data?.[0]?.id || null; }).catch(() => {});
-  }
-  // 本机自托管时 key 里写的是 127.0.0.1，浏览器登录态在 localhost 上
-  return lfProject && `${LF_URL.replace('//127.0.0.1', '//localhost')}/project/${lfProject}`;
-}
-
 // ---------- 喵团手上的事：主 agent（调度者）每做一件事记一条 ----------
-// 回一条消息、转述一个任务结果、推一条目标新进展、建一个目标，都是一件事：做到哪一步（step）、做完的结果（outcome，进轨迹）。
+// 回一条消息、转述一个任务结果、推一条目标新进展、建一个目标，都是一件事：做到哪一步（step）、做完的结果（outcome）。
 // 只放在内存里，做完就丢。App 顶栏状态显示正在做的那一步；后台任务自己的步骤在任务里。
 
 // replyIn：做完会往哪个聊天发消息。App 在那个聊天里显示「…」（仿 Muse：执行过程聊天里只有省略号，步骤看顶栏）。
-// input：这件事的完整输入（用户原话、任务结果），只进轨迹，不存。
-function startActivity(u, { title, kind = 'message', chatId, replyIn, taskId, goalId, input }) {
+function startActivity(u, { title, kind = 'message', chatId, replyIn, taskId, goalId }) {
   const a = { id: newId('a'), uid: u.id, kind, title: String(title || '').replace(/\s+/g, ' ').slice(0, 40), chatId, replyIn, taskId, goalId, status: 'running', step: '' };
-  lfStart(a, input ?? title);
   u.activity.push(a);
   return a;
 }
@@ -305,14 +174,12 @@ function pushActivity(a) {
 function activityStep(a, text) {
   if (a?.status !== 'running') return;
   a.step = String(text).slice(0, 40);
-  lfEvent(a, a.step);
   pushActivity(a);
 }
 
 function endActivity(a, outcome, status = 'done') {
   if (a?.status !== 'running') return;
   Object.assign(a, { status, step: '', outcome: String(outcome || '').replace(/\s+/g, ' ').slice(0, 80) });
-  lfEnd(a);
   const u = U(a);
   u.activity = u.activity.filter((x) => x !== a);
   pushActivity(a);
@@ -368,14 +235,8 @@ function chatList(u, q = '') {
 const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
 const cleanStrings = (_, v) => (typeof v === 'string' ? v.replace(LONE_SURROGATE, '') : v);
 
-// name：这次调用是干什么的（调度决策、转述……），轨迹里的 generation 名
-async function longcat(system, user, maxTokens = 600, { json = false, name = 'LongCat' } = {}) {
+async function longcat(system, user, maxTokens = 600, { json = false } = {}) {
   const messages = [{ role: 'system', content: system }, { role: 'user', content: user }];
-  const start = Date.now();
-  const trace = (attrs) => lfChild(traceCtx.getStore(), { name, start, end: Date.now(), attrs: {
-    'langfuse.observation.type': 'generation', 'langfuse.observation.model.name': DISPATCH_MODEL,
-    'langfuse.observation.model.parameters': { max_tokens: maxTokens, json }, 'langfuse.observation.input': messages, ...attrs,
-  } });
   const call = () => fetch(LONGCAT_URL, {
     method: 'POST',
     headers: { Authorization: `Bearer ${LONGCAT_KEY}`, 'Content-Type': 'application/json' },
@@ -386,27 +247,16 @@ async function longcat(system, user, maxTokens = 600, { json = false, name = 'Lo
     }, cleanStrings),
     signal: AbortSignal.timeout(60_000),
   });
-  try {
-    // 代理/网络偶尔抖一下会直接 "fetch failed"（连接没建立），隔一秒重试一次。
-    const r = await call().catch(async (e) => {
-      if (e.name === 'TimeoutError') throw e;
-      console.error('[longcat] 重试：', e.message, e.cause?.code || '');
-      await new Promise((ok) => setTimeout(ok, 1000));
-      return call();
-    });
-    if (!r.ok) throw new Error(`LongCat ${r.status}: ${(await r.text()).slice(0, 200)}`);
-    const body = await r.json();
-    const content = (body.choices?.[0]?.message?.content || '').trim();
-    trace({
-      'langfuse.observation.output': content,
-      ...(body.usage && { 'langfuse.observation.usage_details': { input: body.usage.prompt_tokens, output: body.usage.completion_tokens } }),
-      'langfuse.observation.metadata.finish_reason': body.choices?.[0]?.finish_reason,
-    });
-    return content;
-  } catch (e) {
-    trace({ 'langfuse.observation.level': 'ERROR', 'langfuse.observation.status_message': e.message });
-    throw e;
-  }
+  // 代理/网络偶尔抖一下会直接 "fetch failed"（连接没建立），隔一秒重试一次。
+  const r = await call().catch(async (e) => {
+    if (e.name === 'TimeoutError') throw e;
+    console.error('[longcat] 重试：', e.message, e.cause?.code || '');
+    await new Promise((ok) => setTimeout(ok, 1000));
+    return call();
+  });
+  if (!r.ok) throw new Error(`LongCat ${r.status}: ${(await r.text()).slice(0, 200)}`);
+  const body = await r.json();
+  return (body.choices?.[0]?.message?.content || '').trim();
 }
 
 // 模型偶尔少写一个收尾的 } 或 ]：先按原样解析，不行就补齐没闭合的括号再试。都不行返回 null。
@@ -474,7 +324,7 @@ const COMPLETION_SYSTEM = `你是「喵团」的前台，用户的私人助理�
 // 前台转述：1–3 条短消息（一条说不下才拆开）
 async function sayResult(u, prompt, fallback) {
   try {
-    const out = parseJsonLoose(await longcat(COMPLETION_SYSTEM, prompt, 300, { json: true, name: '转述' }));
+    const out = parseJsonLoose(await longcat(COMPLETION_SYSTEM, prompt, 300, { json: true }));
     const parts = (Array.isArray(out?.messages) ? out.messages : [out?.reply ?? out?.text])
       .map((x) => String(x ?? '').trim()).filter(Boolean).slice(0, 3);
     if (parts.length) return parts;
@@ -579,7 +429,7 @@ function closeAsk(u, chatId, picked, text) {
 async function dispatch(u, text, imageCount, chatId = u.state.currentChat) {
   const state = u.state;
   const raw = await longcat(DISPATCHER_SYSTEM,
-    `${dispatcherContext(u)}\n\n【用户新消息】${text || '（只发了图）'}${imageCount ? `（附带 ${imageCount} 张图片）` : ''}\n\n只输出 JSON。`, 600, { json: true, name: '调度决策' });
+    `${dispatcherContext(u)}\n\n【用户新消息】${text || '（只发了图）'}${imageCount ? `（附带 ${imageCount} 张图片）` : ''}\n\n只输出 JSON。`, 600, { json: true });
   let out;
   // 解析不了时，至少把 reply 那句话抠出来，别把一串 JSON 发给用户。
   out = parseJsonLoose(raw) || { reply: /"reply"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(raw)?.[1] || '收到～', task: null };
@@ -597,7 +447,7 @@ async function dispatch(u, text, imageCount, chatId = u.state.currentChat) {
     search = String(text).replace(/^(你|您)?(知道|了解|听说过|认识)/, '').replace(/[吗呢？?。！!～~\s]+$/, '').trim().slice(0, 80) || null;
   }
   if (search) out.task = null;
-  let reply = out.reply; // 回复和 App 真正要做的事对不上时换掉（out.reply 原样留给轨迹对照）
+  let reply = out.reply; // 回复和 App 真正要做的事对不上时换掉
   if (imageCount && !out.task && !steer) {
     // 调度者看不到图，带图的消息一律交给执行 agent。模型没派任务时回复常是「看不了图」，和要做的事对不上，一起换掉。
     out.task = { title: '看看你发的图', brief: `用户发来 ${imageCount} 张图片，并说：「${text || '（没说话）'}」。按用户的话办：问了图里的什么（是什么、颜色、上面的字、哪里、谁……）就直接回答；要找同款、找更多图、查相关信息就接着去做；没说话就说说图里有什么。结果第一句直接回答用户的问题。` };
@@ -633,10 +483,6 @@ async function dispatch(u, text, imageCount, chatId = u.state.currentChat) {
     goal: out.goal?.brief ? out.goal : null,
     goalDone: (Array.isArray(out.goal_done) ? out.goal_done : []).map((id) => state.goals.find((g) => g.id === String(id) && !g.done)).filter(Boolean),
   };
-  // 轨迹：模型给的决定 → App 校验、兜底改写后真正执行的决定（两边不一样时就是要查的地方）
-  lfEvent(traceCtx.getStore(), '调度结果', { 'langfuse.observation.input': out, 'langfuse.observation.output': {
-    ...d, steer: steer && { task_id: steer.task.id, instruction: steer.instruction }, stop: stop?.id, goalDone: d.goalDone.map((g) => g.id),
-  } });
   return d;
 }
 
@@ -670,7 +516,7 @@ async function quickSearch(u, chatId, question, query, act) {
       queries.push(query);
       if (attempt === 1) break;
       activityStep(act, '看搜索结果');
-      const j = parseJsonLoose(await longcat(SEARCH_JUDGE, `用户的问题：${question}\n搜索词：${query}\n结果：\n${rowsText(got)}`, 160, { json: true, name: '判断搜索结果' })) || {};
+      const j = parseJsonLoose(await longcat(SEARCH_JUDGE, `用户的问题：${question}\n搜索词：${query}\n结果：\n${rowsText(got)}`, 160, { json: true })) || {};
       if (j.relevant !== false) break;
       if (!j.next || String(j.next).trim() === query) break;
       query = String(j.next).trim().slice(0, 80);
@@ -682,7 +528,7 @@ async function quickSearch(u, chatId, question, query, act) {
   let out = {};
   activityStep(act, '组织回答');
   try {
-    out = parseJsonLoose(await longcat(SEARCH_ANSWER, `现在是 ${nowText()}\n用户的问题：${question}\n搜索结果：\n${rowsText(rows)}`, 450, { json: true, name: '组织回答' })) || {};
+    out = parseJsonLoose(await longcat(SEARCH_ANSWER, `现在是 ${nowText()}\n用户的问题：${question}\n搜索结果：\n${rowsText(rows)}`, 450, { json: true })) || {};
   } catch (e) { console.error('[search]', e.message); }
   const parts = (Array.isArray(out.messages) ? out.messages : []).map((x) => String(x || '').trim()).filter(Boolean).slice(0, 3);
   if (!parts.length) parts.push(rows.length ? '搜了一下，没找到靠谱的答案。' : '搜索暂时用不了，等下再试试？');
@@ -893,8 +739,7 @@ const CATEGORIES = new Set(['life', 'work', 'coding', 'social']);
 function createTask(u, { title, brief, kind = 'chat', images = [], goalId, chatId, callMode, category, query }) {
   const t = { id: newId('t'), uid: u.id, title: String(title).slice(0, 20), brief, kind, goalId, chatId, images, ...(callMode && { callMode }),
     ...(CATEGORIES.has(category) && { category }), ...(query && { query: String(query).slice(0, 300) }),
-    status: 'queued', steps: [], createdAt: new Date().toISOString(),
-    ...(LF_AUTH && { traced: true }) }; // 开了轨迹以后建的任务，App 里才显示「轨迹」链接
+    status: 'queued', steps: [], createdAt: new Date().toISOString() };
   u.state.tasks.push(t);
   if (kind !== 'goal') accounts.bumpUsage(u.id, 'tasks'); // 目标检查另算（runGoal 里）
   save(u);
@@ -1037,14 +882,11 @@ async function runTask(t) {
   let r;
   // 接回的这一轮：说明是按当前状态重新拼的，和当初发出去的可能略有出入
   const prompt = t.round > 1 ? revisionPrompt(t) : firstPrompt(t);
-  const round = t.round || 1;
   try {
     r = await runRound(t, prompt);
   } catch (e) {
     r = { error: e.message };
   }
-  const runId = t.runId;
-  const steps = t.steps.filter((s) => !s.agent).map((s) => s.name).join(' → '); // 下面重新排队时会清空
   t.steps.forEach((s) => { if (s.status === 'running') Object.assign(s, { status: 'done', cut: true }); }); // 这一轮结束时还没做完的步骤
   t.agents?.forEach((a) => { if (a.status === 'running') Object.assign(a, { status: 'cut', endedAt: isoNow() }); });
   if (r.lost) { // agent 重启过，这一轮没了：重新排队
@@ -1074,7 +916,6 @@ async function runTask(t) {
       deliver(t).catch((e) => console.error('[deliver]', e.message));
     }
   }
-  lfRound(t, { prompt, round, runId, steps, r });
   pump();
 }
 
@@ -1127,10 +968,9 @@ async function deliver(t) {
   const redial = t.kind === 'goal' && u.state.goals.find((g) => g.id === t.goalId && g.kind === 'redial');
   if (t.kind === 'goal' && !redial) return deliverGoal(t);
   if (redial) endRedial(redial, t); // 重拨的结果不走目标的「有新进展才说」：像普通任务一样转述，挂通话组件
-  const act = startActivity(u, { title: `转述「${t.title}」的结果`, kind: 'deliver', chatId: t.chatId, replyIn: t.chatId || u.state.currentChat, taskId: t.id,
-    input: t.status === 'done' ? t.result?.text : `失败：${t.error}` });
+  const act = startActivity(u, { title: `转述「${t.title}」的结果`, kind: 'deliver', chatId: t.chatId, replyIn: t.chatId || u.state.currentChat, taskId: t.id });
   try {
-    await traceCtx.run(act, () => deliverTask(t, act));
+    await deliverTask(t, act);
   } catch (e) {
     endActivity(act, `没转述成：${e.message}`, 'failed');
     throw e;
@@ -1368,7 +1208,7 @@ function runGoal(g) {
   return task;
 }
 
-// 每 30 秒：同步一下账号（新邀请的、被停用的），再看谁的目标到点了
+// 每 30 秒：同步一下账号（新建的、被停用的），再看谁的目标到点了
 setInterval(() => {
   refreshUsers();
   for (const u of users.values()) {
@@ -1412,9 +1252,9 @@ async function deliverGoal(t) {
   const photos = (t.result.photos || []).filter((p) => !g.seen.includes(p.id));
   g.seen = [...g.seen, ...photos.map((p) => p.id)].slice(-500);
   saveGoal(g);
-  const act = startActivity(u, { title: `目标「${g.title}」有新进展`, kind: 'goal', replyIn: state.currentChat, goalId: g.id, taskId: t.id, input: raw });
+  const act = startActivity(u, { title: `目标「${g.title}」有新进展`, kind: 'goal', replyIn: state.currentChat, goalId: g.id, taskId: t.id });
   activityStep(act, '写消息');
-  const parts = await traceCtx.run(act, () => sayResult(u, `现在是 ${nowText()}\n这是用户设的持续目标「${g.title}」检查到的新进展，请主动告诉用户（像朋友突然发来消息）。\n最新状态：${g.status.text}\n要点：${body.slice(0, 1500) || '（无）'}\n附图：${photos.length} 张`, g.status.text));
+  const parts = await sayResult(u, `现在是 ${nowText()}\n这是用户设的持续目标「${g.title}」检查到的新进展，请主动告诉用户（像朋友突然发来消息）。\n最新状态：${g.status.text}\n要点：${body.slice(0, 1500) || '（无）'}\n附图：${photos.length} 张`, g.status.text);
   activityStep(act, '发消息');
   await sendParts(u, parts.map((text) => ({ text })), { first: { taskId: t.id, goalId: g.id }, last: { ...(photos.length && { photos }) } });
   noteSaid(t, parts.join(' '));
@@ -1431,7 +1271,7 @@ async function goalFromText(u, text) {
   activityStep(act, '理解这个目标');
   let out = {};
   try {
-    out = parseJsonLoose(await traceCtx.run(act, () => longcat(GOAL_SYSTEM, `【现在】${nowText()}\n【用户画像】${dispatcherContext(u).split('\n')[1] || ''}\n【用户想要的目标】${text}`, 400, { json: true, name: '解析目标' }))) || {};
+    out = parseJsonLoose(await longcat(GOAL_SYSTEM, `【现在】${nowText()}\n【用户画像】${dispatcherContext(u).split('\n')[1] || ''}\n【用户想要的目标】${text}`, 400, { json: true })) || {};
   } catch (e) {
     endActivity(act, `没建成：${e.message}`, 'failed');
     throw e;
@@ -1635,7 +1475,7 @@ function clientIp(req) {
 
 // 登录失败限流：同一个名字 15 分钟里错到 10 次、同一个 IP 错到 50 次（同一个办公室出口 IP 是共用的），就先锁 15 分钟
 const LOCK_MS = 15 * 60_000;
-const loginFails = new Map(); // 'ip:…' / 'name:…' → { n, at }
+const loginFails = new Map(); // 'ip:…' / 'name:…' / 'reg:…'（注册次数）→ { n, at }
 const loginLocked = (keys) => keys.some((k) => { const f = loginFails.get(k); return f && f.n >= (k.startsWith('ip:') ? 50 : 10) && Date.now() - f.at < LOCK_MS; });
 function loginFailed(keys) {
   for (const k of keys) {
@@ -1644,6 +1484,9 @@ function loginFailed(keys) {
   }
 }
 setInterval(() => { for (const [k, f] of loginFails) if (Date.now() - f.at > LOCK_MS) loginFails.delete(k); }, 600_000).unref();
+
+// 调试用的注册接口：只能注册成员账号。本机（非 HTTPS）默认开；线上默认关，要用时设 ALLOW_REGISTER=1（ALLOW_REGISTER=0 则本机也关）
+const ALLOW_REGISTER = process.env.ALLOW_REGISTER ? process.env.ALLOW_REGISTER === '1' : !SECURE;
 
 // asToken：原生 App 登录（请求体带 "token": true）：token 放在响应里给它自己存，不下发 cookie
 function startSession(req, res, user, asToken = false) {
@@ -1674,15 +1517,16 @@ async function authRoute(req, res, url) {
     const me = accounts.sessionUser(authToken(req));
     return me ? sendJson(res, 200, { name: me.name, role: me.role }) : sendJson(res, 401, { error: '请先登录' });
   }
-  // 邀请链接（邀请码在链接的 # 后面，不会出现在任何请求地址和日志里）：只带 code 是先看是谁的邀请；带上 password 是设密码、激活并登录
-  if (url.pathname === '/api/auth/invite' && req.method === 'POST') {
-    const { code = '', password, token: asToken = false } = await readBody(req);
-    if (password === undefined) {
-      const inv = accounts.peekInvite(code);
-      return inv ? sendJson(res, 200, { name: inv.name, reset: inv.status === 'active' }) : sendJson(res, 404, { error: '邀请链接无效或已过期，找管理员重新发一个' });
-    }
+  // 注册（调试用）：建成员账号、建好他的主目录，直接登录；同一个 IP 15 分钟最多注册 10 个
+  if (url.pathname === '/api/auth/register' && req.method === 'POST') {
+    if (!ALLOW_REGISTER) return sendJson(res, 404, { error: 'not found' });
+    const { name = '', password = '', token: asToken = false } = await readBody(req);
+    const keys = [`reg:${clientIp(req)}`];
+    if (loginLocked(keys)) return sendJson(res, 429, { error: '注册太频繁了，15 分钟后再试' });
     let user;
-    try { user = await accounts.acceptInvite(code, password); } catch (e) { return sendJson(res, 400, { error: e.message }); }
+    try { user = await accounts.createUser({ name, password }); } catch (e) { return sendJson(res, 400, { error: e.message }); }
+    loginFailed(keys);
+    provision(user);
     return startSession(req, res, user, asToken === true);
   }
   return sendJson(res, 404, { error: 'not found' });
@@ -1711,7 +1555,7 @@ const server = http.createServer(async (req, res) => {
       if (!owner) return sendJson(res, 401, { error: 'unauthorized' });
       const body = await readBody(req, 1 << 20);
       const t = owner.state.tasks.find((x) => `task-${x.id}` === body.session_id) || null;
-      const result = await traceCtx.run(undefined, () => placeCall({ longcat, parseJson: parseJsonLoose }, owner, t, body, (stage, rec) => onCallStage(t, stage, rec)));
+      const result = await placeCall({ longcat, parseJson: parseJsonLoose }, owner, t, body, (stage, rec) => onCallStage(t, stage, rec));
       const redial = scheduleRedial(owner, t, body, result); // 没接通：排一个自动重拨，告诉 agent 几点会再打、这次别自己再打
       if (redial) {
         const at = hhmm(redial.schedule.once);
@@ -1737,7 +1581,6 @@ const server = http.createServer(async (req, res) => {
         me: { name: u.name, role: u.role },
         messages: state.messages.filter((m) => m.chatId === state.currentChat).slice(-200), chats: chatList(u), currentChat: state.currentChat,
         tasks: state.tasks.slice(-50), goals: state.goals, activity: u.activity,
-        traceBase: u.role === 'admin' ? traceBase() : null, // 轨迹里是所有人的完整对话，只给管理员
       });
     }
     // ---- 喵团的电话：通话记录（侧边栏「喵团档案 → 电话」），新的在后 ----
@@ -1768,11 +1611,10 @@ const server = http.createServer(async (req, res) => {
       addMessage(u, { role: 'me', text: text.trim(), images: files, chatId });
       closeAsk(u, chatId, picked, text.trim());
       // 主 agent 的这一轮：每一步推给 App，顶栏实时显示做到哪一步
-      const act = startActivity(u, { title: text.trim() || `看你发的 ${files.length} 张图`, chatId, replyIn: chatId,
-        input: `${text.trim()}${files.length ? `（附带 ${files.length} 张图片）` : ''}` });
+      const act = startActivity(u, { title: text.trim() || `看你发的 ${files.length} 张图`, chatId, replyIn: chatId });
       activityStep(act, '想想怎么回');
       let d;
-      try { d = await traceCtx.run(act, () => dispatch(u, text.trim(), files.length, chatId)); } catch (e) {
+      try { d = await dispatch(u, text.trim(), files.length, chatId); } catch (e) {
         console.error('[dispatch]', e.message);
         d = { reply: '我这边网络有点卡，等下再说一次？', search: null, task: null, steer: null, stop: null, goal: null, goalDone: [], failed: true };
       }
@@ -1781,7 +1623,7 @@ const server = http.createServer(async (req, res) => {
       if (taskOver) { d.task = null; d.reply = taskOver; }
       const goalOver = d.goal && goalLimit(u);
       if (goalOver) { d.goal = null; d.reply = goalOver; }
-      const did = []; // 这一轮做了什么，作为这件事的结果进轨迹
+      const did = []; // 这一轮做了什么，作为这件事的结果
       for (const g of d.goalDone) {
         activityStep(act, `完成目标「${g.title}」`);
         setGoalDone(g, true, '你在聊天里说不用再盯了');
@@ -1804,7 +1646,7 @@ const server = http.createServer(async (req, res) => {
         did.push(`停了「${d.stop.title}」`);
       }
       if (d.search) { // 普通搜索：App 马上去搜，搜完直接发回答（搜的时候聊天里只有「…」，步骤在顶栏）
-        traceCtx.run(act, () => quickSearch(u, chatId, text.trim(), d.search, act)).catch((e) => { console.error('[search]', e.message); endActivity(act, `搜索出错了：${e.message}`, 'failed'); });
+        quickSearch(u, chatId, text.trim(), d.search, act).catch((e) => { console.error('[search]', e.message); endActivity(act, `搜索出错了：${e.message}`, 'failed'); });
         return sendJson(res, 200, { ok: true });
       }
       if (d.steer) activityStep(act, `让「${d.steer.task.title}」改一下`);
@@ -1919,7 +1761,7 @@ const server = http.createServer(async (req, res) => {
 
 // 启动：把没停用的账号都载进来，各自的任务接着跑、目标接着盯
 for (const row of accounts.activeUsers()) loadUser(row);
-if (!accounts.listUsers().length) console.log('还没有账号：node scripts/user.mjs invite <名字> --admin（从单用户版升级：node scripts/user.mjs adopt <你的名字>）');
+if (!accounts.listUsers().length) console.log('还没有账号：node scripts/user.mjs add <名字> --admin（从单用户版升级：node scripts/user.mjs adopt <你的名字>）');
 if (fs.existsSync(path.join(DATA_DIR, 'state.json'))) console.warn(`单用户版的数据（${path.join(DATA_DIR, 'state.json')}）还没归到账号下：先停掉 App 和 agent，再 node scripts/user.mjs adopt <你的名字>`);
 
 server.requestTimeout = 0;

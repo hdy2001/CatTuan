@@ -1,6 +1,6 @@
-// 账号：用户、登录会话、邀请链接、每日用量，存在 <数据目录>/app.db（Node 自带的 node:sqlite，App 仍然零依赖）。
-// 只能邀请，不开放注册：管理员用 scripts/user.mjs 建账号、发一次性邀请链接，同事打开后自己设密码。
-// 密码用 scrypt 加盐；登录会话的 token 和邀请码在库里都只存 SHA-256，库泄露了也拿不到能用的 token。
+// 账号：用户、登录会话、每日用量，存在 <数据目录>/app.db（Node 自带的 node:sqlite，App 仍然零依赖）。
+// 名字 + 密码登录：管理员用 scripts/user.mjs 建账号、改密码；调试时也可以走 App 的 /api/auth/register 注册成员账号。
+// 密码用 scrypt 加盐；登录会话的 token 在库里只存 SHA-256，库泄露了也拿不到能用的 token。
 // App 和 scripts/user.mjs 两个进程会同时开这个库：WAL + busy_timeout，互不阻塞。
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,7 +11,6 @@ import { DatabaseSync } from 'node:sqlite';
 const scrypt = promisify(crypto.scrypt);
 const SCRYPT = { N: 16384, r: 8, p: 1, maxmem: 64 << 20 };
 const SESSION_DAYS = 30;
-const INVITE_DAYS = 7;
 export const AGENT_PORT_BASE = 8701; // 每人的 agent 从这里往上排（单用户版的 8650 留给沿用老数据的管理员）
 export const NAME_RE = /^[\p{L}\p{N}_.-]{1,20}$/u; // 登录名：中英文、数字、_ . -，最多 20 个字
 export const MIN_PASSWORD = 8;
@@ -63,13 +62,7 @@ export function openAccounts(dataDir) {
       ua TEXT
     );
     CREATE INDEX IF NOT EXISTS auth_sessions_user ON auth_sessions(user_id);
-    CREATE TABLE IF NOT EXISTS invites (
-      code_hash TEXT PRIMARY KEY,
-      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-      created_at TEXT NOT NULL,
-      expires_at TEXT NOT NULL,
-      used_at TEXT
-    );
+    DROP TABLE IF EXISTS invites;
     CREATE TABLE IF NOT EXISTS usage_daily (
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       day TEXT NOT NULL,
@@ -93,13 +86,16 @@ export function openAccounts(dataDir) {
       return Math.max(AGENT_PORT_BASE, (row?.p || 0) + 1);
     },
 
-    createUser({ name, role = 'member', agentHome = null, agentPort }) {
+    // 建账号时就设好密码，直接是可以登录的状态（status 里的 'invited' 只剩老库里没设过密码的账号）
+    async createUser({ name, password, role = 'member', agentHome = null, agentPort }) {
       name = String(name || '').trim();
       if (!NAME_RE.test(name)) throw new Error('名字只能用中英文、数字和 _ . -，最多 20 个字');
+      if (String(password || '').length < MIN_PASSWORD) throw new Error(`密码至少 ${MIN_PASSWORD} 位`);
       if (api.findUser(name)) throw new Error(`已经有叫「${name}」的账号了`);
+      const hash = await hashPassword(String(password));
       const id = `u_${crypto.randomBytes(5).toString('hex')}`;
-      q(`INSERT INTO users (id, name, role, status, agent_home, agent_port, created_at) VALUES (?, ?, ?, 'invited', ?, ?, ?)`)
-        .run(id, name, role, agentHome, agentPort ?? api.nextAgentPort(), isoNow());
+      q(`INSERT INTO users (id, name, role, status, password_hash, agent_home, agent_port, created_at) VALUES (?, ?, ?, 'active', ?, ?, ?, ?)`)
+        .run(id, name, role, hash, agentHome, agentPort ?? api.nextAgentPort(), isoNow());
       return api.getUser(id);
     },
 
@@ -110,34 +106,17 @@ export function openAccounts(dataDir) {
       return api.getUser(id);
     },
 
-    // 邀请码只在这里出现一次（明文），库里存哈希；同一个人再发一次，之前没用的就作废（用来重置密码）。
-    createInvite(userId) {
-      const code = crypto.randomBytes(18).toString('base64url');
-      q('DELETE FROM invites WHERE user_id = ? AND used_at IS NULL').run(userId);
-      q('INSERT INTO invites (code_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)').run(sha256(code), userId, isoNow(), inDays(INVITE_DAYS));
-      return code;
-    },
-
-    peekInvite(code) {
-      const row = q(`SELECT u.id, u.name, u.status FROM invites i JOIN users u ON u.id = i.user_id
-        WHERE i.code_hash = ? AND i.used_at IS NULL AND i.expires_at > ?`).get(sha256(code), isoNow());
-      return row && row.status !== 'disabled' ? row : null;
-    },
-
-    // 用邀请链接设密码：激活账号；以前的登录全部作废（重置密码时把别处登着的踢下线）
-    async acceptInvite(code, password) {
-      const inv = api.peekInvite(code);
-      if (!inv) throw new Error('邀请链接无效或已过期，找管理员重新发一个');
+    // 改密码（管理员重置）：停用的账号保持停用，其余变成可登录；以前的登录全部作废，别处登着的踢下线
+    async setPassword(id, password) {
       if (String(password || '').length < MIN_PASSWORD) throw new Error(`密码至少 ${MIN_PASSWORD} 位`);
       const hash = await hashPassword(String(password));
       db.exec('BEGIN');
       try {
-        q(`UPDATE users SET password_hash = ?, status = 'active' WHERE id = ?`).run(hash, inv.id);
-        q('UPDATE invites SET used_at = ? WHERE code_hash = ?').run(isoNow(), sha256(code));
-        q('DELETE FROM auth_sessions WHERE user_id = ?').run(inv.id);
+        q(`UPDATE users SET password_hash = ?, status = CASE status WHEN 'disabled' THEN 'disabled' ELSE 'active' END WHERE id = ?`).run(hash, id);
+        q('DELETE FROM auth_sessions WHERE user_id = ?').run(id);
         db.exec('COMMIT');
       } catch (e) { db.exec('ROLLBACK'); throw e; }
-      return api.getUser(inv.id);
+      return api.getUser(id);
     },
 
     async verifyPassword(name, password) {

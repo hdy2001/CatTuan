@@ -1,76 +1,117 @@
 #!/usr/bin/env bash
-# 在一台全新的 Ubuntu 24.04 服务器上一次性装好喵团。用 root 跑；可以重复跑，装过的步骤会跳过。
-# 用法：
-#   APP_DOMAIN=app.example.com REPO_URL=https://github.com/<you>/CatTuan.git bash setup.sh
-# 代码已经在 /srv/cattuan 了（比如从本机 rsync 过去）就不用 REPO_URL。跑完按最后的提示做（详见 deploy/README.md）。
+# 在 Ubuntu 服务器上装好并启动喵团。用 root 跑；可以重复跑：第一次是安装，之后 git pull 完再跑一次就是更新。
+#   APP_DOMAIN=app.example.com bash deploy/setup.sh   有域名：Caddy 自动申请 HTTPS 证书（域名记在 /etc/cattuan.env，之后不用再给）
+#   bash deploy/setup.sh                              没域名：http://<服务器 IP>（明文，只适合临时用）
+# 第一次会问 LongCat API Key（也可以用 LONGCAT_API_KEY=… 传进来）。
 set -euo pipefail
-
+DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_USER=cattuan
-APP_DIR=/srv/cattuan
-NODE_MAJOR="${NODE_MAJOR:-26}" # 和本机一致；24 也行（App 用到的 node:sqlite 22.13 起就不用开实验开关）
-: "${APP_DOMAIN:?要设 APP_DOMAIN（App 的域名，比如 app.example.com）}"
+ENV_FILE=/etc/cattuan.env
+[ "$(id -u)" = 0 ] || { echo '请用 root 跑'; exit 1; }
+as_app() { sudo -u "$APP_USER" -H bash -c "cd '$DIR' && $*"; }
+[ -f "$ENV_FILE" ] && APP_DOMAIN="${APP_DOMAIN:-$(sed -n 's|^PUBLIC_ORIGIN=https://||p' "$ENV_FILE")}"
 
-[ "$(id -u)" = 0 ] || { echo "请用 root 跑"; exit 1; }
-step() { printf '\n==> %s\n' "$*"; }
-as_app() { sudo -u "$APP_USER" -H bash -lc "cd '$APP_DIR' && $*"; }
-
-step "时区、基础软件包（含中文字体：不然沙箱截图和实时画面里是方块字）"
-timedatectl set-timezone Asia/Shanghai
-apt-get update -y
-DEBIAN_FRONTEND=noninteractive apt-get install -y git curl ca-certificates rsync sqlite3 ufw caddy \
-  build-essential \
-  fonts-noto-cjk fonts-noto-color-emoji
-
-step "swap：每个用户一个 agent 进程，内存吃紧时有个兜底"
-if ! swapon --show | grep -q .; then
-  fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
-  echo '/swapfile none swap sw 0 0' >> /etc/fstab
+echo '==> 系统软件：Caddy、sqlite3（备份用）、中文字体（不然沙箱截图是方块字）、Node.js'
+timedatectl set-timezone Asia/Shanghai 2>/dev/null || ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
+if ! command -v caddy >/dev/null || ! command -v sqlite3 >/dev/null; then
+  apt-get update -y
+  DEBIAN_FRONTEND=noninteractive apt-get install -y git curl sudo cron rsync sqlite3 caddy fonts-noto-cjk fonts-noto-color-emoji
 fi
-
-step "Node.js $NODE_MAJOR"
-if ! node -v 2>/dev/null | grep -q "^v$NODE_MAJOR\."; then
-  curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | bash -
+node -e 'const [a, b] = process.versions.node.split(".").map(Number); process.exit(a > 22 || (a === 22 && b >= 19) ? 0 : 1)' 2>/dev/null || {
+  curl -fsSL https://deb.nodesource.com/setup_26.x | bash -
   apt-get install -y nodejs
-fi
+}
 
-step "运行用户 $APP_USER 和代码 $APP_DIR"
+echo "==> 运行用户 $APP_USER、依赖、沙箱的 Chromium"
 id "$APP_USER" >/dev/null 2>&1 || useradd --system --create-home --shell /bin/bash "$APP_USER"
-if [ ! -d "$APP_DIR/.git" ] && [ ! -f "$APP_DIR/app/server.mjs" ]; then
-  : "${REPO_URL:?代码还没放到 $APP_DIR：设 REPO_URL 让脚本 git clone，或者先从本机 rsync 过去}"
-  git clone "$REPO_URL" "$APP_DIR"
-fi
-chown -R "$APP_USER:$APP_USER" "$APP_DIR"
+chown -R "$APP_USER:$APP_USER" "$DIR"
+as_app 'npm ci --omit=dev --prefix app && npm ci --omit=dev --prefix sandbox'
+(cd "$DIR/sandbox" && npx playwright-core install-deps chromium)
+as_app 'cd sandbox && npx playwright-core install --no-shell chromium' # 沙箱直接用完整 Chrome，不要 headless shell
 
-step "Pi SDK 执行 runtime（App 的锁定依赖）"
-as_app "cd app && npm ci --omit=dev"
-
-step "沙箱浏览器：playwright-core 和它对应版本的 Chromium（含系统依赖）"
-as_app "cd sandbox && npm ci --omit=dev"
-(cd "$APP_DIR/sandbox" && npx playwright-core install-deps chromium)
-as_app "cd sandbox && npx playwright-core install chromium"
-
-step "配置文件"
-mkdir -p /etc/cattuan
-[ -f /etc/cattuan/cattuan.env ] \
-  || sed -e "s|APP_DOMAIN|$APP_DOMAIN|g" "$APP_DIR/deploy/cattuan.env.example" > /etc/cattuan/cattuan.env
-chown root:"$APP_USER" /etc/cattuan/cattuan.env && chmod 640 /etc/cattuan/cattuan.env
-[ -f "$APP_DIR/agent-home/.env" ] || as_app "cp agent-home/.env.example agent-home/.env && chmod 600 agent-home/.env"
-sed -e "s|APP_DOMAIN|$APP_DOMAIN|g" "$APP_DIR/deploy/Caddyfile" > /etc/caddy/Caddyfile
-mkdir -p /var/backups/cattuan && chown "$APP_USER:$APP_USER" /var/backups/cattuan && chmod 700 /var/backups/cattuan
-
-step "systemd 服务"
-cp "$APP_DIR"/deploy/systemd/*.service "$APP_DIR"/deploy/systemd/*.timer /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable cattuan-sandbox cattuan-agents cattuan-app cattuan-backup.timer caddy
-
-step "防火墙：只开 SSH、80、443"
-ufw allow OpenSSH && ufw allow 80/tcp && ufw allow 443/tcp && ufw --force enable
-
-cat <<EOF
-
-装好了。接下来（详见 $APP_DIR/deploy/README.md）：
-  1. 填 LongCat key：  sudo -u $APP_USER nano $APP_DIR/agent-home/.env
-  2. 建管理员账号：    cd $APP_DIR && sudo -u $APP_USER node scripts/user.mjs invite <你的名字> --admin
-  3. 启动：            systemctl restart caddy && systemctl start cattuan-sandbox cattuan-agents cattuan-app
-  4. 打开第 2 步打印的邀请链接，设好密码就能登录。
+echo "==> 配置：$ENV_FILE、LongCat key、Caddy"
+[ -f "$ENV_FILE" ] || cat > "$ENV_FILE" <<'EOF'
+# 喵团线上配置（systemd 读）。改完 systemctl restart cattuan-app。PUBLIC_ORIGIN 由 deploy/setup.sh 按 APP_DOMAIN 填。
+PUBLIC_ORIGIN=
+# 调试用的注册接口 POST /api/auth/register：要用时改成 1
+ALLOW_REGISTER=0
+# 成员的每日额度、后台任务并发（管理员不限）。下面是默认值，要改就去掉 #
+# QUOTA_MESSAGES_PER_DAY=300
+# QUOTA_TASKS_PER_DAY=40
+# QUOTA_GOAL_CHECKS_PER_DAY=48
+# QUOTA_GOALS=5
+# QUOTA_GOAL_MIN_EVERY=60
+# MAX_RUNNING=4
+# MAX_RUNNING_PER_USER=2
 EOF
+sed -i "s|^PUBLIC_ORIGIN=.*|PUBLIC_ORIGIN=${APP_DOMAIN:+https://$APP_DOMAIN}|" "$ENV_FILE"
+chown "root:$APP_USER" "$ENV_FILE" && chmod 640 "$ENV_FILE"
+
+KEY_FILE="$DIR/agent-home/.env"
+[ -f "$KEY_FILE" ] || as_app 'cp agent-home/.env.example agent-home/.env && chmod 600 agent-home/.env'
+if ! grep -q '^LONGCAT_API_KEY=.' "$KEY_FILE"; then
+  KEY="${LONGCAT_API_KEY:-}"
+  [ -n "$KEY" ] || { read -rsp 'LongCat API Key：' KEY; echo; }
+  [ -n "$KEY" ] || { echo '没填 key，先不启动'; exit 1; }
+  sed -i "s|^LONGCAT_API_KEY=.*|LONGCAT_API_KEY=$KEY|" "$KEY_FILE"
+fi
+
+cat > /etc/caddy/Caddyfile <<EOF
+# deploy/setup.sh 生成，重跑会覆盖。App、沙箱、agent 都只听 127.0.0.1，对外只有这里。
+${APP_DOMAIN:-:80} {
+	encode gzip
+	# 聊天和任务进度靠 SSE 实时推，别缓冲
+	reverse_proxy 127.0.0.1:3210 {
+		flush_interval -1
+	}
+}
+EOF
+
+echo '==> systemd 服务、每日备份'
+unit() { # $1 名字  $2 说明  $3 启动命令
+  cat > "/etc/systemd/system/cattuan-$1.service" <<EOF
+[Unit]
+Description=$2
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=$APP_USER
+WorkingDirectory=$DIR
+EnvironmentFile=$ENV_FILE
+ExecStart=$3
+Restart=always
+RestartSec=3
+# 先只给主进程发 SIGTERM（agents 守护进程会挨个停掉各人的 gateway），超时再全部杀掉
+KillMode=mixed
+TimeoutStopSec=40
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+unit sandbox '喵团沙箱浏览器 :8660' "$DIR/scripts/start-sandbox.sh"
+unit agents '喵团执行 agent（每个账号一个 Pi gateway）' "$(command -v node) $DIR/scripts/agents.mjs"
+unit app '喵团 App :3210' "$DIR/scripts/start-app.sh"
+mkdir -p /var/backups/cattuan && chown "$APP_USER:$APP_USER" /var/backups/cattuan && chmod 700 /var/backups/cattuan
+echo "0 4 * * * $APP_USER bash $DIR/deploy/backup.sh 2>&1 | logger -t cattuan-backup" > /etc/cron.d/cattuan
+
+echo '==> 启动（有后台任务在跑就先等，最多 10 分钟；没跑完的任务重启后会自动续跑）'
+idle() {
+  local n
+  n=$(curl -fsS --max-time 5 http://127.0.0.1:3210/api/health | node -pe 'const d = JSON.parse(require("fs").readFileSync(0)); d.running + d.queued') || return 0
+  [ "$n" = 0 ]
+}
+for _ in $(seq 120); do idle && break; sleep 5; done
+systemctl daemon-reload
+systemctl enable --now cron
+systemctl enable caddy cattuan-sandbox cattuan-agents cattuan-app
+systemctl restart caddy cattuan-sandbox cattuan-agents cattuan-app
+for _ in $(seq 30); do curl -fsS http://127.0.0.1:3210/api/health >/dev/null 2>&1 && break; sleep 1; done
+curl -fsS http://127.0.0.1:3210/api/health >/dev/null 2>&1 || { echo 'App 没起来，看日志：journalctl -u cattuan-app -n 50'; exit 1; }
+
+URL="https://${APP_DOMAIN:-}"; [ -n "${APP_DOMAIN:-}" ] || URL='http://<服务器 IP>'
+echo; echo "好了：$URL"
+if as_app 'node scripts/user.mjs list' | grep -q '还没有账号'; then
+  echo "先建管理员：cd $DIR && sudo -u $APP_USER node scripts/user.mjs add <你的名字> --admin"
+fi

@@ -137,7 +137,7 @@ async function talk(deps, req, o) {
     + `\n【可以告诉商家】${req.share || '无'}\n【要问清】${(req.questions || []).join('；') || '无'}`
     + `\n【回来问用户的情况】${(req.ask_user_if || []).join('；') || '无'}\n【这通电话的结果】${o.label}`;
   try {
-    const out = deps.parseJson(await deps.longcat(TALK_SYSTEM, prompt, 1000, { json: true, name: '模拟通话' }));
+    const out = deps.parseJson(await deps.longcat(TALK_SYSTEM, prompt, 1000, { json: true }));
     const lines = (Array.isArray(out?.lines) ? out.lines : [])
       .map((l) => ({ who: l?.who === 'shop' ? 'shop' : 'ai', text: String(l?.text || '').trim() })).filter((l) => l.text);
     if (lines.length) {

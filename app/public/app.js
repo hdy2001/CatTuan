@@ -727,8 +727,7 @@ function sheetFoot(t) {
   }
   if (t.status === 'failed' || t.status === 'stopped') btns.push(`<button type="button" class="tsbtn primary" data-task-retry="${t.id}">${t.status === 'failed' ? '重试' : '重新开始'}</button>`);
   if (t.chatId && t.kind !== 'goal' && !isActive(t) && !MOCK) btns.push(`<button type="button" class="tsbtn" data-task-chat="${t.id}">回到聊天</button>`);
-  const trace = t.traced ? traceLink(`sessions/task-${t.id}`) : '';
-  return btns.length || trace ? `${btns.join('')}${trace}` : '';
+  return btns.join('');
 }
 
 function renderTaskSheet() {
@@ -846,9 +845,6 @@ function sheetDrag(sheet, scroller, close) {
 }
 sheetDrag('#taskSheet', '#taskDetail', () => closeTask());
 sheetDrag('#goalSheet', '#goalDetail', () => closeGoalSheet());
-
-// 调试用：开了 Langfuse（scripts/start-langfuse.sh）才有。任务链到 Langfuse 会话 task-<id>（调度者 + 执行 agent 的完整轨迹）。
-const traceLink = (path) => (S.traceBase ? `<a class="alink" href="${esc(`${S.traceBase}/${path}`)}" target="_blank" rel="noopener">轨迹 ›</a>` : '');
 
 // 用户中途 / 做完后提的修改，每条的去向
 const REV_STATE = {

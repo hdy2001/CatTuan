@@ -215,7 +215,7 @@ textarea { width: 100%; resize: vertical; font-family: ui-monospace, Menlo, mono
       ['POST', '/api/auth/login', '登录（token:true 拿 Bearer token）', { name: '', password: '', token: true }],
       ['GET', '/api/auth/me', '当前账号'],
       ['POST', '/api/auth/logout', '退出，当前 token 作废'],
-      ['POST', '/api/auth/invite', '查看 / 激活邀请', { code: '' }],
+      ['POST', '/api/auth/register', '注册成员账号（调试用）', { name: '', password: '', token: true }],
     ]],
     ['聊天', [
       ['GET', '/api/state', '全量状态'],
@@ -315,7 +315,7 @@ textarea { width: 100%; resize: vertical; font-family: ui-monospace, Menlo, mono
     rec.json = data;
     if (rec.status === 200 && data) {
       collectIds(data);
-      if (path === '/api/auth/login' || path === '/api/auth/invite') onLogin(data);
+      if (path === '/api/auth/login' || path === '/api/auth/register') onLogin(data);
       if (path === '/api/auth/me') { S.me = data; showWho(); }
     }
     if (rec.status === 401 && path !== '/api/auth/login') { S.me = null; showWho(); }

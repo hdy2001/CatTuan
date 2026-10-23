@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 执行 agent 守护进程：给每个没停用的账号跑一个 Pi gateway（沿用各自的数据目录、端口和 key，见 app/homes.mjs），
 // 挂了自动拉起（一启动就挂的退避 2s、4s … 最多 60s）；账号停用了就把它的 gateway 停掉。
-// 每 15 秒对一遍账号库，新邀请的人不用重启就会有 agent。
+// 每 15 秒对一遍账号库，新建的账号不用重启就会有 agent。
 // 线上由 systemd 的 cattuan-agents 管；本机由 scripts/start.sh 起。收到 SIGTERM / Ctrl+C 时先挨个停掉 gateway 再退出。
 // 每个 gateway 的输出在它主目录的 gateway.out。
 import { spawn } from 'node:child_process';
@@ -86,6 +86,6 @@ process.on('SIGTERM', () => quit('SIGTERM'));
 process.on('SIGINT', () => quit('SIGINT'));
 
 const n = acc.activeUsers().length;
-log(n ? `${n} 个账号，给每人起一个 agent` : '还没有账号：node scripts/user.mjs invite <名字> --admin（或从单用户版升级：adopt <名字>）');
+log(n ? `${n} 个账号，给每人起一个 agent` : '还没有账号：node scripts/user.mjs add <名字> --admin（或从单用户版升级：adopt <名字>）');
 reconcile();
 setInterval(reconcile, 15_000);

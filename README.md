@@ -20,22 +20,21 @@
 
 ```
 app/            调度者 + 任务队列 + 目标调度 + Web App（聊天 / 目标 / 任务三个 Tab）+ 图片代理 + 登录页
-  accounts.mjs            账号（只能邀请）：用户、登录会话、邀请链接、每日用量，存 app/data/app.db（node:sqlite）
+  accounts.mjs            账号（名字 + 密码）：用户、登录会话、每日用量，存 app/data/app.db（node:sqlite）
   pi-gateway.mjs          基于 Pi SDK 的任务执行入口，兼容 /v1/runs、SSE、停止和插话
   homes.mjs               账号独立的数据目录、端口与凭据
   tools/                  原生 Node 业务工具：通话、搜索、读网页、搜图、记忆、技能、识图
   data/users/<id>/        每个人的聊天、任务、目标、上传的图、回放与 agent-home/
 sandbox/        沙箱浏览器：网页搜索和读网页（只读）；profile 在 sandbox/profile/
-deploy/         部署：systemd、Caddy、每日备份，见 deploy/README.md
+deploy/         部署：setup.sh 一键安装 / 更新（systemd、Caddy、每日备份），见 deploy/README.md
 agent-home/     执行 agent 的模板目录；管理员也可沿用此处的本地数据
   SOUL.md                 执行 agent 的人设与工具使用说明
   config.yaml             工具、技能和记忆的开关
   skills/cattuan/         项目自带技能（深度搜索、打电话、本地生活）
   memories/               长期记忆和用户资料
   pi/sessions/            Pi 的持久化任务会话
-langfuse/       调试用的轨迹分析：本机自托管 Langfuse 的 docker-compose.yml（见下面「调试：轨迹分析」）
-scripts/        start.sh 一键启动；restart.sh 等没有进行中的任务再重启（重启前没跑完的任务也会自动续跑）（start-sandbox.sh / start-app.sh 可单独启动）；start-langfuse.sh 启动 Langfuse
-  user.mjs                账号管理：invite 发邀请链接 / list / disable / enable / adopt（从单用户版升级）
+scripts/        start.sh 一键启动；restart.sh 等没有进行中的任务再重启（重启前没跑完的任务也会自动续跑）（start-sandbox.sh / start-app.sh 可单独启动）
+  user.mjs                账号管理：add 建号 / passwd 改密码 / list / disable / enable / adopt（从单用户版升级）
   agents.mjs              agent 守护进程：给每个账号跑一个 Pi gateway（start-agent.sh <主目录>），挂了自动拉起，停用的账号停掉
 ```
 
@@ -48,7 +47,7 @@ git clone <仓库地址> CatTuan && cd CatTuan
 cd app && npm ci --omit=dev && cd ..                              # 安装 Pi SDK（锁定 @earendil-works/pi-coding-agent 1.3.0）
 cd sandbox && npm ci --omit=dev && cd ..                                # 装 playwright-core（复用本机 Playwright 缓存的 Chromium）
 cp agent-home/.env.example agent-home/.env                      # 填上自己的 LONGCAT_API_KEY
-node scripts/user.mjs invite <你的名字> --admin                    # 建管理员账号，打开打印的链接设密码
+node scripts/user.mjs add <你的名字> --admin                       # 建管理员账号，按提示设密码
 ```
 
 从单用户版升级（原来的聊天、记忆都留着）：先停掉 App 和 agent，再跑一次 `node scripts/user.mjs adopt <你的名字>`。它把 `app/data/state.json`、上传的图、回放归到这个账号下，agent 沿用仓库的 `agent-home`，最后打印设密码的链接。
@@ -72,30 +71,13 @@ scripts/start.sh                     # sandbox :8660 + 每个账号一个 agent�
 
 小范围给同事用，部署到服务器见 [deploy/README.md](deploy/README.md)。
 
-- **账号**：只能邀请，不开放注册。管理员 `node scripts/user.mjs invite 小王` 发一个 7 天有效、只能用一次的链接，同事打开后自己设密码。再发一次等于重置密码；`disable` 立刻下线、停掉他的 agent，数据保留。密码用 scrypt 加盐，登录会话的 token 在库里只存哈希。
-- **鉴权**：网页用 HttpOnly cookie。原生 App 登录时在请求体里加 `"token": true`（`/api/auth/login`、`/api/auth/invite` 都支持），响应里返回 `token`、不下发 cookie，之后每个请求（包括 SSE `/api/events`、图片 `/api/uploads/…`）带 `Authorization: Bearer <token>`。两种是同一张会话表：30 天有效、用着自动续期，`/api/auth/logout`、`disable`、重置密码都会让它作废。
+- **账号**：名字 + 密码登录，分管理员和成员。管理员用 `node scripts/user.mjs add 小王` 建号并设密码（`--admin` 建管理员），`passwd 小王` 改密码（旧密码和所有登录作废）；`disable` 立刻下线、停掉他的 agent，数据保留。调试用的 `POST /api/auth/register` 可以注册成员账号并直接登录：本机（`PUBLIC_ORIGIN` 不是 https）默认开，线上默认关，设 `ALLOW_REGISTER=1` 打开、`ALLOW_REGISTER=0` 关掉；同一 IP 15 分钟最多注册 10 个。密码用 scrypt 加盐，登录会话的 token 在库里只存哈希。
+- **鉴权**：网页用 HttpOnly cookie。原生 App 登录时在请求体里加 `"token": true`（`/api/auth/login`、`/api/auth/register` 都支持），响应里返回 `token`、不下发 cookie，之后每个请求（包括 SSE `/api/events`、图片 `/api/uploads/…`）带 `Authorization: Bearer <token>`。两种是同一张会话表：30 天有效、用着自动续期，`/api/auth/logout`、`disable`、重置密码都会让它作废。
 - **隔离**：每个人的聊天、任务、目标、上传的图、回放分开存，实时推送（SSE）只推给本人，拿别人的 id 调接口一律 404。
 - **执行 agent 每人一个**：每人一个 Pi gateway 和独立数据主目录，记忆、Pi 会话分开。业务工具直接在 Node 进程内运行，以 `CATTUAN_HOME` / `PI_HOME` 定位数据，无额外 agent 框架或 Python 环境。
 - **沙箱浏览器大家共用**：实时画面按任务编号（工具从任务会话 id 取）只推给任务的主人；猜不准是谁的就不显示。
-- **角色**：管理员（`--admin`）能看 Langfuse 轨迹链接，不受额度限制。成员每天有消息、后台任务、目标检查的额度，最多同时盯 5 个目标、最短 60 分钟查一次；后台任务全局最多 4 个、每人最多 2 个同时跑，按先来后到轮流。都可以在环境变量里调，见 `deploy/cattuan.env.example`。
+- **角色**：管理员（`--admin`）不受额度限制。成员每天有消息、后台任务、目标检查的额度，最多同时盯 5 个目标、最短 60 分钟查一次；后台任务全局最多 4 个、每人最多 2 个同时跑，按先来后到轮流。都可以在环境变量里调，线上在 `/etc/cattuan.env`（见 [deploy/README.md](deploy/README.md)）。
 - **上线配置**：`PUBLIC_ORIGIN`（App 的 https 地址：来源校验、cookie 的 Secure / `__Host-` 前缀都按它来）。本机开发不用设。
-
-## 调试：轨迹分析（Langfuse）
-
-调度者和 App 侧的任务轨迹可以在本机自托管的 [Langfuse](https://langfuse.com)（MIT）里按任务看。可选，不开不影响使用。
-
-```bash
-brew install colima docker docker-compose   # 没有 docker 的话
-scripts/start-langfuse.sh                   # 第一次要拉镜像，几分钟
-scripts/restart.sh app
-```
-
-- 第一次运行会随机生成 `langfuse/.env`（数据库密码、项目 key、登录账号，不进仓库），启动 `langfuse/docker-compose.yml`，把项目 key 写入 `agent-home/.env`。App 使用 `CATTUAN_LANGFUSE_*` 配置采集。
-- 打开 http://localhost:3000 ，账号 `dev@cattuan.local`，密码在 `langfuse/.env` 的 `LANGFUSE_USER_PASSWORD`。
-- 任务会话 ID 为 `task-<任务 id>`，包括「调度者 · 回消息」「后台任务 · App 侧」「调度者 · 转述结果」。普通聊天记在 `chat-<聊天 id>`，目标创建记在 `goal-<目标 id>`，目标检查记在对应任务下。App 任务卡片的「轨迹 ›」可打开任务会话。
-- 当前记录范围是 BFF（`app/server.mjs`）发出的调度模型和任务生命周期轨迹，Pi 内部模型调用尚未接入此采集；工具步骤仍显示在任务详情中。
-- App 通过 OTLP/HTTP 发送 span；Langfuse 未启动或发送失败只会丢轨迹，不影响任务。
-- 停掉：`docker-compose -p cattuan-langfuse -f langfuse/docker-compose.yml down`（数据保留在 docker volume）；关闭记录则删除 `agent-home/.env` 中的 `CATTUAN_LANGFUSE_*` 后重启 App。
 
 ## 交互
 
