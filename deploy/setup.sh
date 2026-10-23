@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 在一台全新的 Ubuntu 24.04 服务器上一次性装好喵团。用 root 跑；可以重复跑，装过的步骤会跳过。
 # 用法：
-#   APP_DOMAIN=app.example.com SITES_DOMAIN=sites.example.com REPO_URL=https://github.com/<you>/CatTuan.git bash setup.sh
+#   APP_DOMAIN=app.example.com REPO_URL=https://github.com/<you>/CatTuan.git bash setup.sh
 # 代码已经在 /srv/cattuan 了（比如从本机 rsync 过去）就不用 REPO_URL。跑完按最后的提示做（详见 deploy/README.md）。
 set -euo pipefail
 
@@ -9,7 +9,6 @@ APP_USER=cattuan
 APP_DIR=/srv/cattuan
 NODE_MAJOR="${NODE_MAJOR:-26}" # 和本机一致；24 也行（App 用到的 node:sqlite 22.13 起就不用开实验开关）
 : "${APP_DOMAIN:?要设 APP_DOMAIN（App 的域名，比如 app.example.com）}"
-: "${SITES_DOMAIN:?要设 SITES_DOMAIN（网站的域名，比如 sites.example.com）}"
 
 [ "$(id -u)" = 0 ] || { echo "请用 root 跑"; exit 1; }
 step() { printf '\n==> %s\n' "$*"; }
@@ -20,7 +19,7 @@ timedatectl set-timezone Asia/Shanghai
 apt-get update -y
 DEBIAN_FRONTEND=noninteractive apt-get install -y git curl ca-certificates rsync sqlite3 ufw caddy \
   build-essential \
-  fonts-noto-cjk fonts-noto-color-emoji xvfb x11vnc novnc websockify
+  fonts-noto-cjk fonts-noto-color-emoji
 
 step "swap：每个用户一个 agent 进程，内存吃紧时有个兜底"
 if ! swapon --show | grep -q .; then
@@ -53,16 +52,16 @@ as_app "cd sandbox && npx playwright-core install chromium"
 step "配置文件"
 mkdir -p /etc/cattuan
 [ -f /etc/cattuan/cattuan.env ] \
-  || sed -e "s|APP_DOMAIN|$APP_DOMAIN|g" -e "s|SITES_DOMAIN|$SITES_DOMAIN|g" "$APP_DIR/deploy/cattuan.env.example" > /etc/cattuan/cattuan.env
+  || sed -e "s|APP_DOMAIN|$APP_DOMAIN|g" "$APP_DIR/deploy/cattuan.env.example" > /etc/cattuan/cattuan.env
 chown root:"$APP_USER" /etc/cattuan/cattuan.env && chmod 640 /etc/cattuan/cattuan.env
 [ -f "$APP_DIR/agent-home/.env" ] || as_app "cp agent-home/.env.example agent-home/.env && chmod 600 agent-home/.env"
-sed -e "s|APP_DOMAIN|$APP_DOMAIN|g" -e "s|SITES_DOMAIN|$SITES_DOMAIN|g" "$APP_DIR/deploy/Caddyfile" > /etc/caddy/Caddyfile
+sed -e "s|APP_DOMAIN|$APP_DOMAIN|g" "$APP_DIR/deploy/Caddyfile" > /etc/caddy/Caddyfile
 mkdir -p /var/backups/cattuan && chown "$APP_USER:$APP_USER" /var/backups/cattuan && chmod 700 /var/backups/cattuan
 
 step "systemd 服务"
 cp "$APP_DIR"/deploy/systemd/*.service "$APP_DIR"/deploy/systemd/*.timer /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable cattuan-xvfb cattuan-sandbox cattuan-agents cattuan-app cattuan-backup.timer caddy
+systemctl enable cattuan-sandbox cattuan-agents cattuan-app cattuan-backup.timer caddy
 
 step "防火墙：只开 SSH、80、443"
 ufw allow OpenSSH && ufw allow 80/tcp && ufw allow 443/tcp && ufw --force enable
@@ -72,6 +71,6 @@ cat <<EOF
 装好了。接下来（详见 $APP_DIR/deploy/README.md）：
   1. 填 LongCat key：  sudo -u $APP_USER nano $APP_DIR/agent-home/.env
   2. 建管理员账号：    cd $APP_DIR && sudo -u $APP_USER node scripts/user.mjs invite <你的名字> --admin
-  3. 启动：            systemctl restart caddy && systemctl start cattuan-xvfb cattuan-sandbox cattuan-agents cattuan-app
+  3. 启动：            systemctl restart caddy && systemctl start cattuan-sandbox cattuan-agents cattuan-app
   4. 打开第 2 步打印的邀请链接，设好密码就能登录。
 EOF

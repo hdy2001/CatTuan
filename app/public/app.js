@@ -21,10 +21,6 @@ if (!MOCK) {
 }
 const isAdmin = () => S.me?.role === 'admin';
 
-const LEDGER_CATS = {
-  expense: ['餐饮', '交通', '购物', '娱乐', '旅行', '居住', '医疗', '学习', '人情', '其他'],
-  income: ['工资', '副业', '红包', '其他'],
-};
 const STATUS = { queued: '排队中', running: '进行中', done: '已完成', failed: '失败', stopped: '已停止', waiting: '待你决定' };
 
 let S = { messages: [], tasks: [], goals: [] };
@@ -136,22 +132,6 @@ const taskById = (id) => S.tasks.find((t) => t.id === id);
 // 没接通的自动重拨（一次性目标跑的任务）：不像例行的目标检查那样藏起来，小电视里也看得到
 const isRedial = (t) => t.kind === 'goal' && S.goals.some((g) => g.id === t.goalId && g.kind === 'redial');
 
-// ---------- 网站（agent 用 publish_site 发布的网页） ----------
-// 网页在单独的源上（本机是 :3211，线上是单独的子域名），App 用 iframe 嵌进来看。
-const siteById = (id) => (S.sites || []).find((s) => s.id === id);
-const sitesOrigin = () => S.sitesOrigin || `${location.protocol}//${location.hostname}:3211`;
-const siteUrl = (s) => `${sitesOrigin()}/${s.id}/?v=${s.version || 1}`;
-
-function siteCards(sites, { thumb = true } = {}) {
-  return (sites || []).map((x) => {
-    const s = siteById(x.id) || x; // 网站改过版本时用最新的
-    return `<div class="sitecard${thumb ? '' : ' slim'}" role="button" tabindex="0" data-open-site="${esc(s.id)}">
-      ${thumb ? `<span class="sitethumb"><iframe src="${esc(siteUrl(s))}" loading="lazy" tabindex="-1" aria-hidden="true" sandbox="allow-scripts allow-same-origin"></iframe></span>` : ''}
-      <span class="siteinfo"><b>🌐 ${esc(s.title)}</b><small>网页${s.version > 1 ? ` · 第 ${s.version} 版` : ''} · 点开看</small></span>
-    </div>`;
-  }).join('');
-}
-
 const fmtSecs = (s) => (s < 60 ? `${s} 秒` : `${Math.floor(s / 60)} 分 ${s % 60} 秒`);
 function elapsed(t) {
   const start = Date.parse(t.startedAt || t.createdAt);
@@ -215,10 +195,8 @@ function msgHtml(m) {
   if (m.text || m.photos?.length) html += `<div class="bubble">${renderText(m.text)}${galleryHtml(m.photos)}</div>`;
   if (m.report?.body) html += reportCard(m);
   if (m.booking) html += bookingHtml(m.booking);
-  if (m.sites?.length) html += siteCards(m.sites);
   // 一键选项只给演示流程（?mock=）用；以前普通搜索存下的选项不再显示
   if (m.options?.length && MOCK) html += `<div class="qopts">${m.options.map((o) => `<button type="button" class="qopt" data-quick="${esc(o.send)}">${esc(o.label)}</button>`).join('')}</div>`;
-  html += loginButtons(m);
   if (m.goalId && !m.taskId && goal) html += `<button type="button" class="taskchip done" data-goto-goal="${goal.id}"><b>🎯</b>新目标：${esc(goal.title)} · ${esc(scheduleLabel(goal.schedule))}</button>`;
   const part = m.partOf && !m.taskId; // 拆开发的前几条
   // 挂了通话组件的（打电话的结果）不再显示来源：点通话组件就能看这通电话的详情（仿 Cue）
@@ -232,9 +210,9 @@ function msgHtml(m) {
 const agentTyping = () => waitingReply > 0
   || (S.activity || []).some((a) => a.status === 'running' && a.replyIn && a.replyIn === S.currentChat);
 // 没有内容的机器人消息不画（以前的普通搜索会先放一条空消息占位）
-const visibleMsg = (m) => m.role !== 'bot' || m.text || m.photos?.length || m.report?.body || m.sites?.length || m.booking || (m.options?.length && MOCK);
+const visibleMsg = (m) => m.role !== 'bot' || m.text || m.photos?.length || m.report?.body || m.booking || (m.options?.length && MOCK);
 
-// 按消息 id 增量更新，只重画内容变了的消息：整块重画会让网站缩略图（iframe）每来一条消息就重新加载一遍。
+// 按消息 id 增量更新，只重画内容变了的消息：整块重画会让图片每来一条消息就重新加载一遍。
 function renderChat() {
   const box = $('#messages');
   const nearBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 120;
@@ -464,7 +442,7 @@ function renderTasks() {
     if (g !== group) items.push({ key: `g:${(group = g)}`, html: `<h3 class="tgroup">${g}</h3>` });
     items.push({ key: t.id, html: taskRow(t) });
   }
-  if (!items.length) items.push({ key: 'empty', html: '<div class="empty">还没有后台任务。让喵团查资料、做网页、看社媒账号、找附近好去处时，它会派执行 agent 去干活。</div>' });
+  if (!items.length) items.push({ key: 'empty', html: '<div class="empty">还没有后台任务。让喵团查资料、找图、打电话时，它会派执行 agent 去干活。</div>' });
   patchList($('#tasks'), items);
   const active = S.tasks.filter(isActive).length;
   $('#taskBadge').hidden = !active;
@@ -549,7 +527,7 @@ function roundLabel(t, r, i, all) {
   return parts.filter(Boolean).join(' · ');
 }
 
-const SANDBOX_TOOLS = new Set(['official_photos', 'official_account', 'xiaohongshu_search', 'deep_web_search', 'read_webpage', 'check_site']);
+const SANDBOX_TOOLS = new Set(['deep_web_search', 'read_webpage']);
 
 const stepItem = (s) => ({ title: stepTitle(s), detail: s.detail || '', name: s.name, at: s.at, end: s.endedAt,
   state: s.status === 'running' ? 'running' : s.cut ? 'cut' : s.ok === false ? 'warn' : 'done' });
@@ -737,10 +715,9 @@ function resultBlock(t) {
   const msg = S.messages.find((m) => m.taskId === t.id && m.report?.body);
   const body = msg ? reportCard(msg)
     : text ? `<div class="tsrtext${openResult || text.length <= 240 ? ' open' : ''}">${mdHtml(text, new Map())}</div>${text.length > 240 ? `<button type="button" class="tsmorebtn" data-result-more>${openResult ? '收起' : '展开全文'}</button>` : ''}` : '';
-  const sites = siteCards(r.sites, { thumb: false });
   const photos = r.photos?.length ? galleryHtml(r.photos.slice(0, 9)) : '';
-  if (!body && !sites && !photos) return '';
-  return `<section class="tsresult"><div class="tssec"><b>RESULT</b><span>执行 agent 交回的结果</span></div>${body}${sites}${photos}</section>`;
+  if (!body && !photos) return '';
+  return `<section class="tsresult"><div class="tssec"><b>RESULT</b><span>执行 agent 交回的结果</span></div>${body}${photos}</section>`;
 }
 
 function sheetFoot(t) {
@@ -924,9 +901,9 @@ const GOAL_KINDS = [
   { id: 'health', name: '健康', svg: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19.5s-7-4.3-7-9.8A4 4 0 0 1 12 7a4 4 0 0 1 7 2.7c0 5.5-7 9.8-7 9.8z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>',
     ideas: ['每天上午 10 点和下午 3 点提醒我喝水', '每晚 23:00 提醒我放下手机准备睡觉', '每天下午 6 点提醒我起来走走、拉伸一下'] },
   { id: 'people', name: '人际', svg: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="9" cy="8.5" r="3.2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M3.5 19c.6-3.2 2.8-5 5.5-5s4.9 1.8 5.5 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="16.6" cy="9" r="2.6" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M16 14.1c2.4.1 4.2 1.8 4.6 4.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
-    ideas: ['每年 5 月 20 日提醒我给妈妈准备生日礼物', '每周五下午提醒我约朋友周末聚一聚', '我关注的博主发了新帖就告诉我'] },
+    ideas: ['每年 5 月 20 日提醒我给妈妈准备生日礼物', '每周五下午提醒我约朋友周末聚一聚', '每周六上午提醒我给爸妈打个电话'] },
   { id: 'money', name: '理财', svg: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5l5 7 5-7M12 11.5V20M8 12.5h8M8 16h8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>',
-    ideas: ['每周日晚上 9 点给我一份记账周报', '北京飞上海的机票降到 800 以下提醒我', '金价跌破每克 900 元时告诉我'] },
+    ideas: ['每月 1 号提醒我还信用卡', '北京飞上海的机票降到 800 以下提醒我', '金价跌破每克 900 元时告诉我'] },
   { id: 'career', name: '事业', svg: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3.5" y="7.5" width="17" height="12" rx="2.4" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M9 7.5V6a1.6 1.6 0 0 1 1.6-1.6h2.8A1.6 1.6 0 0 1 15 6v1.5M3.5 12.5h17" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>',
     ideas: ['每天早上 9 点汇总 AI 行业的重要新闻', '每周一早上 9 点提醒我写这周计划', 'OpenAI 发布新模型时第一时间告诉我'] },
 ];
@@ -1054,7 +1031,6 @@ async function loadState() {
   try { S = await (await fetch('/api/state')).json(); } catch { return; }
   renderChat(); renderTasks(); renderGoals(); renderChatBar(); renderTV(); renderMe();
   if (!$('#drawer').hidden && !$('#chatSearch').value.trim()) renderChatsList();
-  if (!loadState.autoLocated) { loadState.autoLocated = true; autoUpdateLocation(); }
 }
 
 // 侧边栏底部的当前账号
@@ -1121,17 +1097,8 @@ function connect() {
     } else if (ev.type === 'goal-removed') {
       S.goals = S.goals.filter((g) => g.id !== ev.id);
       renderGoals();
-    } else if (ev.type === 'ledger' && !$('#ledgerSheet').hidden) {
-      loadLedger();
-    } else if (ev.type === 'location') {
-      S.location = ev.location;
-      if (!$('#locationSheet').hidden) renderLocation();
     } else if (ev.type === 'chats') {
       loadState(); // 开了新聊天 / 切换 / 删除（可能是在别的设备上）
-    } else if (ev.type === 'site') {
-      S.sites = [ev.site, ...(S.sites || []).filter((s) => s.id !== ev.site.id)];
-      if (!$('#sitesSheet').hidden) renderSitesList();
-      renderChat();
     }
   };
 }
@@ -1201,12 +1168,6 @@ $('#toolPanel').addEventListener('click', (e) => {
   const tool = e.target.closest('[data-tool]')?.dataset.tool;
   if (tool === 'album') return $('#fileInput').click();
   if (tool === 'camera') return $('#cameraInput').click();
-  if (tool === 'ledger') { togglePanel(false); return openLedger(); }
-  if (tool === 'goal') { togglePanel(false); openGoalNew(); }
-  if (tool === 'accounts') { togglePanel(false); openAccounts(); }
-  if (tool === 'skills') { togglePanel(false); openSkills(); }
-  if (tool === 'location') { togglePanel(false); openLocation(); }
-  if (tool === 'sites') { togglePanel(false); openSites(); }
 });
 
 function downscale(file) {
@@ -1323,286 +1284,12 @@ $('#goalNewForm').addEventListener('submit', async (e) => {
   }
 });
 
-// ---------- 记账面板 ----------
-let ledgerType = 'expense';
-let ledgerCat = '餐饮';
-
-function renderCats() {
-  if (!LEDGER_CATS[ledgerType].includes(ledgerCat)) ledgerCat = LEDGER_CATS[ledgerType][0];
-  $('#lCategories').innerHTML = LEDGER_CATS[ledgerType].map((c) => `<button type="button" data-cat="${c}" class="${c === ledgerCat ? 'on' : ''}">${c}</button>`).join('');
-  document.querySelectorAll('.ltype button').forEach((b) => b.classList.toggle('on', b.dataset.type === ledgerType));
-}
-
-const yuan = (n) => `¥${(Math.round(n * 100) / 100).toLocaleString('zh-CN')}`;
-
-async function loadLedger() {
-  let d;
-  try { d = await (await fetch('/api/ledger')).json(); } catch { return; }
-  const s = d.summary;
-  const top = s.byCategory.slice(0, 4).map((c) => `<span>${esc(c.category)} ${yuan(c.amount)}</span>`).join('');
-  $('#ledgerSummary').innerHTML = `
-    <div class="lnums">
-      <div><small>${s.month.replace('-', ' 年 ')} 月支出</small><b>${yuan(s.expense)}</b></div>
-      <div><small>收入</small><b>${yuan(s.income)}</b></div>
-      <div><small>今天</small><b>${yuan(s.todayExpense)}</b></div>
-    </div>${top ? `<div class="ltop">${top}</div>` : ''}`;
-  $('#ledgerEntries').innerHTML = d.entries.map((e) => `
-    <div class="lentry">
-      <span class="lcat">${esc(e.category)}</span>
-      <span class="lnote">${esc(e.note || '')}<small>${e.date.slice(5)}${e.source === 'chat' ? ' · 聊天' : e.source === 'agent' ? ' · AI' : ''}</small></span>
-      <b class="${e.type}">${e.type === 'income' ? '+' : '-'}${yuan(e.amount)}</b>
-      <button type="button" data-ledger-del="${e.id}" aria-label="删除">×</button>
-    </div>`).join('') || '<div class="empty">这个月还没记账。也可以直接在聊天里说「午饭 35」。</div>';
-  $('#ledgerMemory').innerHTML = d.memory ? renderText(d.memory) : '还没有记账记忆。多记几笔，喵团会慢慢摸清你的预算和消费习惯。';
-}
-
-function openLedger() {
-  renderCats();
-  loadLedger();
-  $('#ledgerSheet').hidden = false;
-  setTimeout(() => $('#lAmount').focus(), 50);
-}
-
-$('#ledgerSheet').addEventListener('click', async (e) => {
-  if (e.target === $('#ledgerSheet') || e.target.closest('[data-close-sheet]')) { $('#ledgerSheet').hidden = true; return; }
-  const type = e.target.closest('.ltype button')?.dataset.type;
-  if (type) { ledgerType = type; renderCats(); return; }
-  const cat = e.target.closest('[data-cat]')?.dataset.cat;
-  if (cat) { ledgerCat = cat; renderCats(); return; }
-  const del = e.target.closest('[data-ledger-del]')?.dataset.ledgerDel;
-  if (del) { await fetch(`/api/ledger/${del}`, { method: 'DELETE' }); loadLedger(); }
-});
-
-$('#ledgerForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const amount = Number($('#lAmount').value);
-  if (!(amount > 0)) { $('#lAmount').focus(); return; }
-  const r = await fetch('/api/ledger', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ type: ledgerType, amount, category: ledgerCat, note: $('#lNote').value.trim() }),
-  });
-  if (!r.ok) return alert((await r.json()).error || '没记上');
-  $('#lAmount').value = ''; $('#lNote').value = '';
-  loadLedger();
-});
-
-// ---------- 平台登录（沙箱浏览器） ----------
-// X / Instagram / Weverse 要在沙箱里登录：点「登录」会在电脑上弹出一个独立的浏览器窗口，用户自己在里面登录，App 不经手密码。
-let SESS = null; // /api/sessions：{ mode, login, platforms: [{ id, label, canLogin, needsLogin, loggedIn, expired, note }] }
-let sessTimer = null;
-
-async function refreshSessions() {
-  try { SESS = await (await fetch('/api/sessions')).json(); sessCheckedAt = new Date().toISOString(); } catch { SESS = { message: '沙箱没连上' }; }
-  renderSessions();
-  // 登录窗口开着时每 3 秒刷新，看什么时候登好、窗口什么时候关。
-  clearTimeout(sessTimer);
-  if (SESS?.mode === 'login') sessTimer = setTimeout(refreshSessions, 3000);
-}
-
-// 社媒账号备忘录：每个平台的登录态 + 在这个平台上已关注的账号。
-let FOLLOWS = [];
-let sessCheckedAt = null;
-
-function renderSessions() {
-  const box = $('#accounts');
-  if (!SESS?.platforms) {
-    box.innerHTML = `<div class="empty">${esc(SESS?.message || '读取中…')}</div>`;
-    return;
-  }
-  const loginOn = isAdmin() && SESS.mode === 'login' && SESS.platforms.find((p) => p.id === SESS.login);
-  box.innerHTML = `${loginOn ? `<div class="logintip"><span>登录窗口已打开：在电脑上弹出的窗口里自己登录 <b>${esc(loginOn.label)}</b>（扫码或输入账号密码，喵团看不到你的密码）。${loginOn.loggedIn ? '已检测到登录 ✓ ' : ''}登好后关掉窗口，或点「完成」。</span><button type="button" data-login-done>完成</button></div>` : ''}
-    <div class="plats memo">${SESS.platforms.map((p) => {
-      const label = !p.canLogin ? '免登录' : p.loggedIn ? '已登录' : p.expired ? '登录已过期' : p.needsLogin ? '未登录' : '免登录可读';
-      const cls = !p.canLogin || p.loggedIn ? 'ok' : p.needsLogin || p.expired ? 'need' : 'opt';
-      const btn = p.canLogin && isAdmin() ? `<button type="button" class="${p.loggedIn ? 'ghost' : ''}" data-login="${p.id}">${p.loggedIn ? '重新登录' : '登录'}</button>` : '';
-      const follows = FOLLOWS.filter((a) => (a.platform || 'weibo') === p.id);
-      const followText = follows.length ? `已关注：${follows.map((a) => `${esc(a.name)}${a.idol ? `（${esc(a.idol)}）` : ''}`).join('、')}` : '还没关注这个平台的账号';
-      return `<div class="plat ${cls}" title="${esc(p.note)}"><i></i><span><b>${esc(p.label)}<em>${label}</em></b><small>${followText}</small></span>${btn}</div>`;
-    }).join('')}</div>
-    <div class="acccheck">登录态检查于 ${sessCheckedAt ? clock(sessCheckedAt) : '—'} · 关注列表由喵团在聊天里帮你维护</div>`;
-}
-
-async function openAccounts() {
-  $('#accountsSheet').hidden = false;
-  if (!isAdmin()) $('#accSub').textContent = '这些平台上的公开账号都可以读：品牌、机构、博主、朋友的公开主页都行，只看不发、不点赞、不评论。平台账号由管理员统一登录，你只管让喵团关注和读。';
-  try { FOLLOWS = await (await fetch('/api/follows')).json(); } catch { FOLLOWS = []; }
-  refreshSessions();
-}
-
-$('#accountsSheet').addEventListener('click', (e) => {
-  if (e.target === $('#accountsSheet') || e.target.closest('[data-close-sheet]')) $('#accountsSheet').hidden = true;
-});
-
-// ---------- 位置（浏览器定位；服务端反查城市/区，只把大致位置给 AI） ----------
-const LOC_AUTO_KEY = 'cattuan.locAuto';
-const LOC_STALE = 30 * 60_000; // 自动更新：超过 30 分钟才重新定位
-
-function renderLocation() {
-  const loc = S.location;
-  $('#locationCard').innerHTML = loc
-    ? `<div class="locplace">📍 ${esc(loc.label || '已获取坐标（地名没查到）')}</div>
-       <div class="locmeta">误差约 ${loc.accuracy >= 1000 ? `${(loc.accuracy / 1000).toFixed(1)} 公里` : `${loc.accuracy} 米`} · ${ago(loc.at)}更新</div>`
-    : '<div class="locplace muted">还没共享位置</div><div class="locmeta">共享后，喵团能回答「附近」「这边」相关的问题</div>';
-  $('#locClear').hidden = !loc;
-  $('#locAuto').checked = store.get(LOC_AUTO_KEY, false);
-}
-
-function locationErrorText(err) {
-  if (!window.isSecureContext) return '浏览器只允许在 https 或 localhost 页面上定位。请用 https 地址（或本机的 http://localhost:3210）打开喵团。';
-  if (!navigator.geolocation) return '这个浏览器不支持定位。';
-  if (err?.code === 1) return '浏览器没有给喵团位置权限：点地址栏左边的站点设置，把「位置」改成允许，然后再点一次「更新位置」。';
-  if (err?.code === 2) return '系统定位不可用：在「系统设置 → 隐私与安全性 → 定位服务」里打开定位，并允许你正在用的浏览器。';
-  if (err?.code === 3) return '定位超时了，换个网络或稍后再试。';
-  return `定位失败：${err?.message || '未知原因'}`;
-}
-
-function showLocationError(text) {
-  $('#locationError').hidden = !text;
-  $('#locationError').textContent = text || '';
-}
-
-async function updateLocation({ silent = false } = {}) {
-  const btn = $('#locUpdate');
-  btn.disabled = true; btn.textContent = '定位中…';
-  try {
-    if (!window.isSecureContext || !navigator.geolocation) throw {};
-    const pos = await new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, reject,
-      { enableHighAccuracy: false, timeout: 15_000, maximumAge: 60_000 }));
-    const r = await fetch('/api/location', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ lat: pos.coords.latitude, lon: pos.coords.longitude, accuracy: pos.coords.accuracy }),
-    });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.error);
-    S.location = d;
-    showLocationError('');
-    if (!silent && !store.get(LOC_AUTO_KEY, null)) store.set(LOC_AUTO_KEY, true); // 第一次共享后默认开自动更新
-    renderLocation();
-  } catch (err) {
-    if (!silent) showLocationError(locationErrorText(err));
-  } finally {
-    btn.disabled = false; btn.textContent = '更新位置';
-  }
-}
-
-function openLocation() {
-  showLocationError('');
-  renderLocation();
-  $('#locationSheet').hidden = false;
-}
-
-$('#locationSheet').addEventListener('click', async (e) => {
-  if (e.target === $('#locationSheet') || e.target.closest('[data-close-sheet]')) { $('#locationSheet').hidden = true; return; }
-  if (e.target.closest('#locUpdate')) updateLocation();
-  if (e.target.closest('#locClear')) {
-    await fetch('/api/location', { method: 'DELETE' });
-    S.location = null;
-    store.set(LOC_AUTO_KEY, false);
-    renderLocation();
-  }
-});
-$('#locAuto').addEventListener('change', (e) => store.set(LOC_AUTO_KEY, e.target.checked));
-
-// 打开 App 时：开了自动更新、浏览器已授权、上次位置超过 30 分钟，才静默更新（不会弹授权框）。
-async function autoUpdateLocation() {
-  if (!store.get(LOC_AUTO_KEY, false) || !navigator.permissions) return;
-  try {
-    if ((await navigator.permissions.query({ name: 'geolocation' })).state !== 'granted') return;
-  } catch { return; }
-  if (S.location && Date.now() - Date.parse(S.location.at) < LOC_STALE) return;
-  updateLocation({ silent: true });
-}
-
-// ---------- 技能（只读：执行 agent 需要什么技能就自己装，用户不用设置） ----------
-const SKILL_GROUPS = [
-  ['store', '按需装的', '做事时发现需要，喵团自己装上的'],
-  ['agent', 'AI 自己写的', '做完复杂任务后总结出来的做法'],
-  ['cattuan', '喵团自带', '深度搜索、做网页、记账等做事手册'],
-  ['user', '其他', ''],
-];
-let SKILLS = [];
-
-function skillRow(s) {
-  const meta = [
-    s.origin === 'store' && s.installedAt ? `${ago(s.installedAt)}装的${s.installReason ? `：${s.installReason}` : ''}` : '',
-    s.lastUsedAt ? `${ago(s.lastUsedAt)}用过` : '',
-  ].filter(Boolean).join(' · ');
-  return `<details class="skill" data-skill="${esc(s.name)}">
-    <summary><span class="sinfo"><b>${esc(s.name)}</b><small>${esc(s.description)}</small>${meta ? `<em>${esc(meta)}</em>` : ''}</span></summary>
-    <div class="sbody"><div class="brief" data-skill-content>展开中…</div></div>
-  </details>`;
-}
-
-function renderSkills() {
-  const box = $('#skillsList');
-  if (!SKILLS.length) { box.innerHTML = '<div class="empty">读取中…</div>'; return; }
-  const active = SKILLS.filter((s) => s.enabled && !s.essential);
-  const groups = SKILL_GROUPS.map(([origin, title, sub]) => {
-    const list = active.filter((s) => s.origin === origin);
-    if (!list.length) return origin === 'store' ? `<div class="sgroup"><b>${title}</b><small>${sub}</small></div><div class="sempty">还没装过。遇到需要新技能的事，喵团会自己去找、自己装。</div>` : '';
-    return `<div class="sgroup"><b>${title}</b><small>${list.length} 个 · ${sub}</small></div>${list.map(skillRow).join('')}`;
-  }).join('');
-  const spare = SKILLS.filter((s) => !s.enabled && s.origin === 'bundled').length;
-  box.innerHTML = groups + `<div class="sstore">🧩 另外还有 ${spare} 个本地技能和在线技能库，需要时喵团会自动装上，不用你操心。</div>`;
-}
-
-async function openSkills() {
-  $('#skillsSheet').hidden = false;
-  try {
-    const d = await (await fetch('/api/skills')).json();
-    SKILLS = d.skills || [];
-    if (d.error) throw new Error(d.error);
-  } catch (e) {
-    $('#skillsList').innerHTML = `<div class="empty">读不到技能：${esc(e.message)}</div>`;
-    return;
-  }
-  renderSkills();
-}
-
-$('#skillsSheet').addEventListener('click', (e) => {
-  if (e.target === $('#skillsSheet') || e.target.closest('[data-close-sheet]')) $('#skillsSheet').hidden = true;
-});
-// 展开时再取全文，省得一次拉几十份 SKILL.md。
-$('#skillsSheet').addEventListener('toggle', async (e) => {
-  const box = e.target.matches?.('details.skill') && e.target.open && e.target.querySelector('[data-skill-content]');
-  if (!box || box.dataset.loaded) return;
-  const d = await (await fetch(`/api/skills/${encodeURIComponent(e.target.dataset.skill)}`)).json();
-  box.dataset.loaded = '1';
-  box.innerHTML = renderText((d.content || d.error || '').replace(/^---[\s\S]*?---\s*/, ''));
-}, true);
-
-// 消息里提到「登录 X」时，在消息下面放一个直接打开登录窗口的按钮。
-const LOGIN_IDS = { x: 'x', instagram: 'instagram', ig: 'instagram', weverse: 'weverse', b站: 'bilibili', 小红书: 'xiaohongshu' };
-function loginButtons(m) {
-  if (m.role !== 'bot' || !m.text || !isAdmin()) return ''; // 平台账号由管理员统一登录，成员这里不放按钮
-  const ids = [...new Set([...m.text.matchAll(/登录\s*(X|Instagram|IG|Weverse|B\s?站|小红书)/gi)]
-    .map((x) => LOGIN_IDS[x[1].toLowerCase().replace(/\s/g, '')]).filter(Boolean))];
-  const plat = (id) => SESS?.platforms?.find((p) => p.id === id);
-  return ids.filter((id) => !plat(id)?.loggedIn)
-    .map((id) => `<button type="button" class="loginchip" data-login="${id}">🔑 登录 ${esc(plat(id)?.label || id)}</button>`).join('');
-}
-
-async function openLogin(platform, btn) {
-  btn.disabled = true;
-  try {
-    const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ platform }) });
-    if (!r.ok) alert((await r.json()).message || '打开登录窗口失败');
-  } catch (e) { alert(`打开登录窗口失败：${e.message}`); }
-  btn.disabled = false;
-  openAccounts(); // 登录进度在「社媒账号」面板里看
-}
-
 document.addEventListener('click', (e) => {
-  const login = e.target.closest('[data-login]');
-  if (login) openLogin(login.dataset.login, login);
-  else if (e.target.closest('[data-login-done]')) fetch('/api/login/done', { method: 'POST' }).finally(refreshSessions);
-  else if (e.target.closest('[data-logout]')) fetch('/api/auth/logout', { method: 'POST' }).finally(() => location.replace('/login'));
+  if (e.target.closest('[data-logout]')) fetch('/api/auth/logout', { method: 'POST' }).finally(() => location.replace('/login'));
 });
-// 从登录窗口切回来时刷新一下状态。
-window.addEventListener('focus', () => { if (!$('#accountsSheet').hidden || SESS?.mode === 'login') refreshSessions(); });
 
 // ---------- 侧边栏（仿豆包 / 微信）：搜索聊天记录、新建对话、目标、后台任务、按日期分组的聊天记录 ----------
-// 聊天之间共用后台任务、目标、记账和网站；删聊天只删聊天内容。
+// 聊天之间共用后台任务和目标；删聊天只删聊天内容。
 const NEW_CHAT_TITLE = '新聊天';
 const currentChat = () => (S.chats || []).find((c) => c.id === S.currentChat);
 const VIEW_TITLE = { goals: '目标', tasks: '后台任务' };
@@ -1678,7 +1365,7 @@ $('#drawer').addEventListener('click', async (e) => {
   const del = e.target.closest('[data-chat-del]')?.dataset.chatDel;
   if (del) {
     const c = (S.chats || []).find((x) => x.id === del);
-    if (confirm(`删除聊天「${c?.title || ''}」？聊天内容会删掉，后台任务、目标、记账和网站不受影响。`)) await chatAction(`/api/chats/${del}`, 'DELETE');
+    if (confirm(`删除聊天「${c?.title || ''}」？聊天内容会删掉，后台任务和目标不受影响。`)) await chatAction(`/api/chats/${del}`, 'DELETE');
     if ($('#chatSearch').value.trim()) searchChats();
     return;
   }
@@ -1785,45 +1472,38 @@ async function openResume() {
           <div class="dd-ent"><b>LongCat 大模型</b><span>${esc(p.model || 'LongCat')}<br>主修中文对话与工具调用</span><time>2026</time></div>
         </section>
         <section><h2>链接</h2>
-          <p>App:// <b>${esc(location.host)}</b><br>网站:// <b>${esc(sitesOrigin().replace(/^\w+:\/\//, ''))}</b><br>（已上线 ${n(p.sites)} 个网页）<br>技能:// <b>agent-home/skills</b></p>
+          <p>App:// <b>${esc(location.host)}</b><br>技能:// <b>agent-home/skills</b></p>
         </section>
         <section><h2>技能</h2>
           <h3>调研</h3><small>精通</small><p>深度搜索 · 研究报告 · 交叉核对</p>
-          <h3>制作</h3><small>熟练</small><p>网页 · 地图标注 · 小游戏</p>
-          <h3>生活</h3><small>熟练</small><p>记账 · 预算 · 目标追踪 · 附近好去处</p>
-          <h3>平台</h3><small>了解</small><p>小红书 · 微博 · X · Instagram · Weverse · B 站</p>
+          <h3>生活</h3><small>熟练</small><p>找图 · 打电话 · 目标追踪</p>
         </section>
         <section><h2>数据</h2>
-          <p><b>${n(p.tasksDone)}</b> 个后台任务<br><b>${n(p.reports)}</b> 份研究报告<br><b>${n(p.sites)}</b> 个网页<br><b>${n(p.goals)}</b> 个长期目标<br><b>${n(p.ledger)}</b> 笔账<br><b>${n(p.chats)}</b> 个话题</p>
+          <p><b>${n(p.tasksDone)}</b> 个后台任务<br><b>${n(p.reports)}</b> 份研究报告<br><b>${n(p.goals)}</b> 个长期目标<br><b>${n(p.chats)}</b> 个话题</p>
         </section>
       </aside>
       <main>
         <section><h2>工作经历</h2>
           ${job('喵团', '私人助理', `${since} - 至今 ｜ 你的手机和电脑`, [
-            `累计完成 <b>${n(p.tasksDone)} 个后台任务</b>，写了 <b>${n(p.reports)} 份研究报告</b>，做了 <b>${n(p.sites)} 个网页</b>`,
-            '查资料、找附近的吃喝玩乐、读小红书和微博等平台的公开账号，结果像聊天一样一两句说清',
+            `累计完成 <b>${n(p.tasksDone)} 个后台任务</b>，写了 <b>${n(p.reports)} 份研究报告</b>`,
+            '查资料、找图、替你打电话问问，结果像聊天一样一两句说清',
             `同时盯着 <b>${n(p.goals)} 个长期目标</b>，有新进展才说，不打扰`,
           ])}
         </section>
         <section><h2>项目经历</h2>
           ${job('深度搜索', 'Owner', since, ['多角度搜索、读原文、<b>交叉核对</b>，输出带编号引用的研究报告', '聊天里只说结论，报告单独一份，表格和引用都排好版'])}
-          ${job('网页工坊', 'Owner', since, ['把调研结果做成导游图、攻略页、小游戏，在 App 的内置浏览器里打开', '发布后在沙箱里<b>真的打开网页看报错</b>，有问题自己修'])}
           ${job('中途改任务', 'Maintainer', since, ['任务跑到一半改要求就<b>直接插话</b>，做完不满意在原任务上再改一轮，也能随时停'])}
-          ${job('记账管家', 'Maintainer', since, ['一句"午饭 35"就记好，自动维护记账记忆和预算提醒'])}
         </section>
         <section><h2>开源依赖</h2>
           <table class="dd-tab">
             <tr><td><b>Pi SDK</b></td><td>后台执行 agent，调工具干活</td></tr>
-            <tr><td><b>microsoft/playwright</b></td><td>沙箱浏览器：读网页、看社媒、检查网页</td></tr>
-            <tr><td><b>Leaflet/Leaflet</b></td><td>网页里的交互地图</td></tr>
-            <tr><td><b>OpenStreetMap</b></td><td>地图底图、地址查坐标</td></tr>
+            <tr><td><b>microsoft/playwright</b></td><td>沙箱浏览器：搜网页、读网页</td></tr>
           </table>
         </section>
         <section><h2>里程碑</h2>
           <table class="dd-tab dd-awards">
-            <tr><td>${since}</td><td>上岗</td><td>找图、记账、盯目标</td></tr>
+            <tr><td>${since}</td><td>上岗</td><td>找图、盯目标</td></tr>
             <tr><td>${since}</td><td>升级</td><td>学会深度搜索，报告带引用</td></tr>
-            <tr><td>${since}</td><td>升级</td><td>学会做网页，能在 App 里打开</td></tr>
             <tr><td>${since}</td><td>升级</td><td>学会中途改任务和停止任务</td></tr>
           </table>
         </section>
@@ -1923,79 +1603,17 @@ for (const id of ['#idViewer', '#resumeViewer']) {
   });
 }
 
-// ---------- 网站列表 + 内置浏览器 ----------
-function renderSitesList() {
-  const list = S.sites || [];
-  $('#sitesList').innerHTML = list.map((s) => `<button type="button" class="siterow" data-open-site="${esc(s.id)}">
-      <span class="sicon">🌐</span>
-      <span><b>${esc(s.title)}</b><small>${s.version > 1 ? `第 ${s.version} 版 · ` : ''}${ago(s.updatedAt)}更新${s.description ? ` · ${esc(s.description)}` : ''}</small></span>
-      <em>打开</em>
-    </button>`).join('') || '<div class="empty">还没有网站。在聊天里说「把 xx 做成一个网页」试试，比如「把这周的行程做成一个导游图网页」。</div>';
-}
-
-function openSites() {
-  renderSitesList();
-  $('#sitesSheet').hidden = false;
-}
-
-$('#sitesSheet').addEventListener('click', (e) => {
-  if (e.target === $('#sitesSheet') || e.target.closest('[data-close-sheet]')) $('#sitesSheet').hidden = true;
-});
-
-const SB_DEVICE_KEY = 'cattuan.sbDevice';
-function setSbDevice(device) {
-  store.set(SB_DEVICE_KEY, device);
-  $('#sbStage').classList.toggle('phone', device === 'phone');
-  $('#sbDevice').textContent = device === 'phone' ? '🖥' : '📱';
-  $('#sbDevice').title = device === 'phone' ? '切到电脑宽度' : '切到手机宽度';
-}
-
-function loadInBrowser(url) {
-  const bar = $('#sbBar');
-  bar.className = 'sbbar';
-  void bar.offsetWidth; // 重新开始进度条动画
-  bar.className = 'sbbar loading';
-  $('#sbFrame').src = url;
-}
-
-function openSite(id) {
-  const s = siteById(id);
-  if (!s) return alert('这个网站找不到了');
-  const url = siteUrl(s);
-  $('#sbTitle').textContent = s.title;
-  $('#sbUrl').textContent = url.replace(/^https?:\/\//, '').replace(/\?.*$/, '');
-  $('#sbOpen').href = url;
-  setSbDevice(store.get(SB_DEVICE_KEY, 'full'));
-  $('#siteBrowser').hidden = false;
-  loadInBrowser(url);
-}
-
-function closeSite() {
-  $('#siteBrowser').hidden = true;
-  $('#sbFrame').src = 'about:blank'; // 停掉网页里的脚本、地图
-}
-
-$('#sbFrame').addEventListener('load', () => { $('#sbBar').className = 'sbbar done'; });
-$('#siteBrowser').addEventListener('click', (e) => {
-  const act = e.target.closest('[data-sb]')?.dataset.sb;
-  if (e.target === $('#siteBrowser') || act === 'close') closeSite();
-  else if (act === 'reload') loadInBrowser($('#sbOpen').href);
-  else if (act === 'device') setSbDevice($('#sbStage').classList.contains('phone') ? 'full' : 'phone');
-});
 document.addEventListener('keydown', (e) => {
-  // 任务详情上面又开了网站、报告、大图时，Esc 先关上面那层；目标详情上面可能还叠着任务详情
-  const nothingAbove = $('#siteBrowser').hidden && $('#reportReader').hidden && $('#lightbox').hidden;
+  // 任务详情上面又开了报告、大图时，Esc 先关上面那层；目标详情上面可能还叠着任务详情
+  const nothingAbove = $('#reportReader').hidden && $('#lightbox').hidden;
   if (e.key === 'Escape' && openGoalId && !openTaskId && nothingAbove) { if ($('#goalMenu').hidden) closeGoalSheet(); else toggleGoalMenu(false); }
   if (e.key === 'Escape' && openTaskId && nothingAbove) closeTask();
   if (e.key === 'Escape' && !$('#goalNewSheet').hidden) $('#goalNewSheet').hidden = true;
-  if (e.key === 'Escape' && !$('#siteBrowser').hidden) closeSite();
   if (e.key === 'Escape' && !$('#reportReader').hidden) $('#reportReader').hidden = true;
   if (e.key === 'Escape' && !$('#drawer').hidden) closeDrawer();
   if (e.key === 'Escape') { $('#idViewer').hidden = true; $('#resumeViewer').hidden = true; }
   const rc = (e.key === 'Enter' || e.key === ' ') && e.target.closest?.('[data-open-report]');
   if (rc) { e.preventDefault(); openReport(rc.dataset.openReport); }
-  const card = (e.key === 'Enter' || e.key === ' ') && e.target.closest?.('[data-open-site]');
-  if (card) { e.preventDefault(); openSite(card.dataset.openSite); }
 });
 
 // ---------- 切换 / 大图 ----------
@@ -2053,8 +1671,6 @@ document.addEventListener('click', (e) => {
   if (quick) { send(quick.dataset.quick, []); return; }
   const report = e.target.closest('[data-open-report]');
   if (report) { openReport(report.dataset.openReport); return; }
-  const site = e.target.closest('[data-open-site]');
-  if (site) { $('#sitesSheet').hidden = true; openSite(site.dataset.openSite); return; }
   const goto = e.target.closest('[data-goto-task]');
   if (goto) { openTask(goto.dataset.gotoTask); return; } // 聊天里「来自后台任务 ›」、小电视：在当前页面上弹出任务详情
   const gotoGoal = e.target.closest('[data-goto-goal]');
@@ -2240,6 +1856,5 @@ if (MOCK) {
   startMock();
 } else {
   showView(store.get('cattuan.view', 'chat'));
-  refreshSessions(); // 聊天里的「登录」按钮也要知道哪些平台已登录
   connect();
 }

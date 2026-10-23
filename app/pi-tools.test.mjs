@@ -6,7 +6,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { createPiTools, createToolContext } from './pi-tools.mjs';
 
-const CONFIG = `platform_toolsets:\n  api_server: [ledger, skills, memory, session_search, vision, testing]\nskills:\n  disabled: [hidden-skill]\nmemory:\n  memory_enabled: true\n  user_profile_enabled: false\n`;
+const CONFIG = `platform_toolsets:\n  api_server: [skills, memory, session_search, vision, testing]\nskills:\n  disabled: [hidden-skill]\nmemory:\n  memory_enabled: true\n  user_profile_enabled: false\n`;
 
 function fixture() {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cattuan-pi-tools-'));
@@ -25,7 +25,7 @@ function fixture() {
 const parsed = (result) => JSON.parse(result.content.find((part) => part.type === 'text').text);
 const invoke = (bridge, name, args = {}, signal) => bridge.tools.find((t) => t.name === name).execute('test-call', args, signal);
 
-test('native Pi tools preserve ledger, skills, memory policy and task history', async (t) => {
+test('native Pi tools preserve skills, memory policy and task history', async (t) => {
   const home = fixture();
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const bridge = await createPiTools({ home, sessionId: 'task-t_testbridge' });
@@ -48,11 +48,6 @@ test('native Pi tools preserve ledger, skills, memory policy and task history', 
   assert.equal(managed.success, true, JSON.stringify(managed));
   assert.equal(fs.readFileSync(path.join(home, 'skills/test-skill/references/research.md'), 'utf8'), 'New research notes.');
 
-  const added = parsed(await invoke(bridge, 'ledger_add', { entries: [{ amount: 35, category: '餐饮', note: '午饭' }] }));
-  assert.ok(!added.error);
-  const ledger = parsed(await invoke(bridge, 'ledger_query'));
-  assert.equal(ledger.summary.totalExpense, 35);
-  assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'ledger/entries.json'))).length, 1);
   const saved = parsed(await invoke(bridge, 'memory', { action: 'add', target: 'memory', content: 'The user prefers concise replies.' }));
   assert.equal(saved.success, true, JSON.stringify(saved));
   assert.match(fs.readFileSync(path.join(home, 'memories/MEMORY.md'), 'utf8'), /prefers concise replies/);
@@ -69,14 +64,14 @@ test('native Pi tools preserve ledger, skills, memory policy and task history', 
   assert.equal(history.sessions[0].task_session_id, 'task-t_previous');
   assert.match(parsed(await invoke(bridge, 'session_search', { session_id: 'task-t_previous' })).sessions[0].messages[0].content, /Hangzhou/);
 
-  fs.writeFileSync(path.join(home, 'config.yaml'), CONFIG + 'agent:\n  disabled_tools: [ledger_delete]\n');
-  await assert.rejects(invoke(bridge, 'ledger_delete', { ids: ['anything'] }), /unavailable or disabled/);
+  fs.writeFileSync(path.join(home, 'config.yaml'), CONFIG + 'agent:\n  disabled_tools: [session_search]\n');
+  await assert.rejects(invoke(bridge, 'session_search', { query: 'Hangzhou' }), /unavailable or disabled/);
 });
 
 test('native network tools propagate cancellation and keep later calls usable', async (t) => {
   const home = fixture();
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
-  fs.writeFileSync(path.join(home, 'config.yaml'), 'platform_toolsets:\n  api_server: [deepsearch, ledger]\n');
+  fs.writeFileSync(path.join(home, 'config.yaml'), 'platform_toolsets:\n  api_server: [deepsearch, skills]\n');
   let entered;
   const requested = new Promise(resolve => { entered = resolve; });
   const server = http.createServer((_req, _res) => entered());
@@ -90,9 +85,9 @@ test('native network tools propagate cancellation and keep later calls usable', 
   await requested;
   controller.abort();
   await rejected;
-  assert.equal(parsed(await invoke(bridge, 'ledger_query')).summary.totalExpense, 0);
+  assert.ok(Array.isArray(parsed(await invoke(bridge, 'skills_list')).skills));
   bridge.close();
-  await assert.rejects(invoke(bridge, 'ledger_query'), { name: 'AbortError' });
+  await assert.rejects(invoke(bridge, 'skills_list'), { name: 'AbortError' });
 });
 
 test('tool credentials come only from the selected home', (t) => {

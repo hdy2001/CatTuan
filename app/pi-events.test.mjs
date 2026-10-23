@@ -4,10 +4,10 @@ import { recordToolEvent } from './pi-events.mjs';
 
 test('Pi event replay is idempotent and a late start cannot reopen a completed step', () => {
   const task = { steps: [] };
-  const event = { tool: 'ledger_add', tool_call_id: 'run-one:tool-one', args: { entries: [] } };
+  const event = { tool: 'memory', tool_call_id: 'run-one:tool-one', args: { action: 'add' } };
   const start = { ...event, event: 'tool.started' };
   const end = { ...event, event: 'tool.completed', result: '{"ok":true}' };
-  const options = { describe: (_name, _args, completed) => ({ title: completed ? '已记账' : '正在记账' }) };
+  const options = { describe: (_name, _args, completed) => ({ title: completed ? '已记住' : '正在记' }) };
   assert.equal(recordToolEvent(task, start, options).created, true);
   recordToolEvent(task, end, options);
   const finished = { ...task.steps[0] };

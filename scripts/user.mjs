@@ -5,7 +5,7 @@
 //   disable <名字>            停用：立刻下线，他的 agent 也会停掉；数据保留
 //   enable <名字>             恢复停用的账号
 //   adopt <名字>              从单用户版升级：把本机原来的数据（app/data 里的聊天、任务、目标、上传的图、回放，
-//                             以及仓库 agent-home 里 agent 的记忆、账本、关注、网站、会话）归到这个账号下，设成管理员。
+//                             以及仓库 agent-home 里 agent 的记忆、会话）归到这个账号下，设成管理员。
 //                             只在升级时跑一次，跑之前先停掉 App 和 agent。
 import fs from 'node:fs';
 import net from 'node:net';
@@ -82,7 +82,7 @@ if (cmd === 'invite') {
   fs.renameSync(legacyState, path.join(dir, 'state.json'));
   if (!legacy.API_SERVER_KEY) ensureAgentEnv(TEMPLATE, port);
   console.log(`原来的聊天、任务、目标、上传的图和回放都归到了「${u.name}」（管理员）下：${dir}`);
-  console.log(`agent 沿用仓库的 agent-home（记忆、账本、关注、网站、会话都在原地），端口 :${port}`);
+  console.log(`agent 沿用仓库的 agent-home（记忆、会话都在原地），端口 :${port}`);
   console.log(`\n打开这个链接设密码（7 天内有效）：\n\n  ${inviteLink(u)}\n`);
 } else {
   const lines = fs.readFileSync(new URL(import.meta.url), 'utf8').split('\n').slice(1);

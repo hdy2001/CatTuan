@@ -176,118 +176,16 @@ textarea:focus { border-color: var(--accent); }
 .toolpanel button:active .ti { filter: brightness(.95); }
 @keyframes panelUp { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: none; } }
 
-.switch { position: relative; width: 36px; height: 20px; flex: none; cursor: pointer; }
-.switch input { opacity: 0; width: 0; height: 0; position: absolute; }
-.switch span { position: absolute; inset: 0; border-radius: 99px; background: var(--line); transition: background .2s; }
-.switch span::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .2s; box-shadow: 0 1px 3px rgba(0, 0, 0, .2); }
-.switch input:checked + span { background: var(--ok); }
-.switch input:checked + span::after { transform: translateX(16px); }
 button.pushtag { border: 0; background: none; padding: 0; cursor: pointer; text-align: left; }
 
-/* ---- 记账面板（底部弹出） ---- */
+/* ---- 底部弹出面板 ---- */
 .sheet { position: fixed; inset: 0; background: var(--scrim); display: flex; align-items: flex-end; justify-content: center; z-index: 9; }
 .sheet[hidden] { display: none; }
 .sheetbody { width: 100%; max-width: 520px; max-height: 88dvh; overflow-y: auto; background: var(--panel); border-radius: 20px 20px 0 0;
   padding: 0 16px max(16px, env(safe-area-inset-bottom)); animation: panelUp .25s ease-out; }
 .sheethead { position: sticky; top: 0; background: var(--panel); display: flex; align-items: center; justify-content: space-between; padding: 14px 0 10px; z-index: 1; }
 .sheetclose { border: 0; background: var(--chip); width: 28px; height: 28px; border-radius: 50%; font-size: 18px; line-height: 1; cursor: pointer; color: var(--muted); }
-.lsummary { background: var(--hero); border-radius: 16px; padding: 12px 14px; }
-.lnums { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 8px; }
-.lnums small { display: block; font-size: 11px; color: var(--muted); }
-.lnums b { font-size: 18px; }
-.lnums div:first-child b { font-size: 22px; }
-.ltop { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-.ltop span { font-size: 11px; padding: 2px 8px; border-radius: 99px; background: var(--panel); color: var(--muted); }
-.lform { display: flex; flex-direction: column; gap: 10px; margin: 14px 0 6px; }
-.ltype { display: flex; gap: 6px; }
-.ltype button, .lcats button { border: 1px solid var(--line); background: var(--panel); color: var(--muted); border-radius: 99px; padding: 5px 14px; cursor: pointer; font-size: 13px; }
-.ltype button.on { background: var(--ink); color: var(--panel); border-color: var(--ink); }
-.lcats { display: flex; flex-wrap: wrap; gap: 6px; }
-.lcats button { padding: 4px 11px; font-size: 12px; }
-.lcats button.on { border-color: var(--accent); color: var(--accent); background: var(--chip); }
-.lamount { display: flex; align-items: baseline; gap: 6px; border-bottom: 2px solid var(--line); padding-bottom: 4px; }
-.lamount:focus-within { border-color: var(--accent); }
-.lamount span { font-size: 22px; font-weight: 700; }
-.lamount input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--ink); font-family: inherit; font-size: 30px; font-weight: 700; line-height: 1.2; }
-.lrow { display: flex; gap: 8px; }
-.lrow input { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 12px; padding: 9px 12px; background: var(--bg); color: var(--ink); font: inherit; outline: none; }
-.lrow button { border: 0; border-radius: 12px; padding: 0 18px; background: var(--accent); color: #fff; font-weight: 600; cursor: pointer; }
-.lsection { font-size: 12px; color: var(--muted); margin: 14px 0 6px; }
-.lentries { display: flex; flex-direction: column; }
-.lentry { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-bottom: 1px solid var(--line); }
-.lcat { flex: none; font-size: 11px; padding: 2px 8px; border-radius: 6px; background: var(--chip); color: var(--muted); }
-.lnote { flex: 1; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lnote small { color: var(--muted); margin-left: 6px; font-size: 11px; }
-.lentry b.expense { color: var(--ink); }
-.lentry b.income { color: var(--ok); }
-.lentry button { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 16px; padding: 0 2px; }
-.lmemory { margin: 14px 0 4px; font-size: 13px; }
-.lmemory summary { cursor: pointer; color: var(--muted); font-size: 12px; }
-
-/* ---- 社媒账号备忘录（沙箱登录，「+」→ 社媒账号） ---- */
-.accounts { margin: 4px 0 8px; display: flex; flex-direction: column; gap: 10px; }
 .accsub { font-size: 12px; color: var(--muted); line-height: 1.5; }
-.plats.memo { grid-template-columns: 1fr; gap: 8px; }
-.plats.memo .plat { padding: 10px 12px; border: 1px solid var(--line); }
-.plats.memo .plat span b { display: flex; align-items: center; gap: 6px; font-size: 14px; }
-.plats.memo .plat span b em { font-style: normal; font-weight: 400; font-size: 11px; color: var(--muted); }
-.plats.memo .plat span small { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.acccheck { font-size: 11px; color: var(--muted); text-align: center; }
-.acchead { display: flex; align-items: baseline; gap: 8px; font-size: 13px; }
-.acchead small { color: var(--muted); font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.plats { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 6px; }
-.plat { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 12px; background: var(--bg); min-width: 0; }
-.plat i { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--dot-idle); }
-.plat.ok i { background: var(--brand); }
-.plat.need i { background: var(--accent); }
-.plat.opt i { background: var(--warn); }
-.plat span { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.25; }
-.plat span b { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.plat span small { font-size: 11px; color: var(--muted); }
-.plat button, .logintip button, .loginchip { flex: none; border: 0; border-radius: 99px; padding: 4px 10px; font-size: 12px; font-weight: 600; cursor: pointer; background: var(--accent); color: #fff; }
-.plat button.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); font-weight: 400; }
-.plat button:disabled, .loginchip:disabled { opacity: .5; cursor: default; }
-.logintip { display: flex; align-items: center; gap: 8px; font-size: 12px; line-height: 1.5; padding: 8px 10px; border-radius: 12px; background: var(--chip); }
-.logintip span { flex: 1; min-width: 0; }
-.loginchip { align-self: flex-start; }
-
-/* ---- 技能（「+」→ 技能） ---- */
-.skills { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 8px; }
-.sgroup { display: flex; align-items: baseline; gap: 8px; margin-top: 8px; font-size: 13px; }
-.sgroup small { font-size: 11px; color: var(--muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-summary.sgroup { cursor: pointer; list-style: none; }
-summary.sgroup::before { content: "▸"; color: var(--muted); font-size: 11px; transition: transform .2s; }
-.sfold[open] > summary.sgroup::before { transform: rotate(90deg); }
-.sfold { display: flex; flex-direction: column; gap: 8px; }
-.sfold > .skill { margin-top: 8px; }
-.skill { border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
-.skill.off { opacity: .6; }
-.skill > summary { display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer; list-style: none; }
-.skill > summary::-webkit-details-marker, summary.sgroup::-webkit-details-marker { display: none; }
-.sinfo { flex: 1; min-width: 0; display: flex; flex-direction: column; line-height: 1.3; }
-.sinfo b { font-size: 13px; }
-.sinfo small { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.sbody { padding: 0 12px 12px; font-size: 12px; display: flex; flex-direction: column; gap: 8px; }
-.sbody .brief { max-height: 40vh; overflow-y: auto; margin: 0; }
-.sdel { align-self: flex-start; border: 1px solid var(--danger); color: var(--danger); background: none; border-radius: 99px; padding: 4px 12px; font-size: 12px; cursor: pointer; }
-.sempty { font-size: 12px; color: var(--muted); padding: 4px 2px; }
-
-/* ---- 位置（「+」→ 位置） ---- */
-.loccard { margin: 6px 0 10px; padding: 14px; border-radius: 16px; background: var(--hero); }
-.locplace { font-size: 16px; font-weight: 700; }
-.locplace.muted { color: var(--muted); font-weight: 600; }
-.locmeta { font-size: 12px; color: var(--muted); margin-top: 4px; }
-.locerr { font-size: 12px; line-height: 1.5; color: var(--danger); background: rgba(229, 72, 77, .08); border-radius: 10px; padding: 8px 10px; margin-bottom: 10px; }
-.locerr[hidden] { display: none; }
-.locactions { display: flex; gap: 8px; margin-bottom: 12px; }
-.locactions button { border-radius: 99px; padding: 8px 16px; font-weight: 600; cursor: pointer; font-size: 13px; }
-.locactions .primary { border: 0; background: var(--accent); color: #fff; }
-.locactions .primary:disabled { opacity: .6; cursor: default; }
-.locactions .ghost { border: 1px solid var(--line); background: none; color: var(--muted); }
-.locactions [hidden] { display: none; }
-.locauto { display: flex; align-items: center; justify-content: space-between; font-size: 13px; padding: 10px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); margin-bottom: 10px; cursor: pointer; }
-.sinfo em { font-style: normal; font-size: 11px; color: var(--ok); margin-top: 2px; }
-.sstore { font-size: 12px; color: var(--muted); background: var(--chip); border-radius: 12px; padding: 10px 12px; margin-top: 4px; line-height: 1.5; }
 
 /* ---- 浏览器实时画面（仿 Claude Cowork） ---- */
 .bview { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; background: var(--bg); }
@@ -322,28 +220,7 @@ summary.sgroup::before { content: "▸"; color: var(--muted); font-size: 11px; t
 .rsrc a { color: var(--ink); }
 .rsrc small { color: var(--muted); margin-left: 6px; }
 
-/* ---- 网站：聊天里的网站卡片、网站列表、内置浏览器 ---- */
-.sitecard { width: 260px; max-width: 100%; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 14px; overflow: hidden;
-  background: var(--panel); box-shadow: var(--shadow); cursor: pointer; text-align: left; }
-.sitecard:hover, .sitecard:focus-visible { border-color: var(--accent); outline: none; }
-.sitecard.slim { width: auto; box-shadow: none; margin-top: 8px; }
-.sitethumb { position: relative; display: block; height: 160px; overflow: hidden; background: #fff; border-bottom: 1px solid var(--line); }
-/* 按手机宽度（390px）渲染，再缩到卡片宽度 */
-.sitethumb iframe { position: absolute; top: 0; left: 0; width: 390px; height: 240px; border: 0; transform: scale(.6667); transform-origin: 0 0; pointer-events: none; }
-.siteinfo { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; min-width: 0; }
-.siteinfo b { font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.siteinfo small { font-size: 11px; color: var(--muted); }
-
-.sitelist { display: flex; flex-direction: column; gap: 8px; padding: 12px 0; }
-.siterow { width: 100%; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 14px;
-  background: var(--bg); cursor: pointer; text-align: left; }
-.siterow:hover { border-color: var(--accent); }
-.siterow .sicon { font-size: 22px; flex: none; }
-.siterow > span:nth-child(2) { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.siterow b { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.siterow small { font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.siterow em { flex: none; font-style: normal; font-size: 12px; font-weight: 600; color: var(--accent); }
-
+/* ---- 全屏查看器：身份证、简历、研究报告 ---- */
 .sitebrowser { position: fixed; inset: 0; z-index: 11; background: rgba(8, 14, 11, .55); display: flex; align-items: center; justify-content: center; }
 .sitebrowser[hidden] { display: none; }
 .sbwin { width: 100%; height: 100dvh; display: flex; flex-direction: column; background: var(--panel); overflow: hidden; animation: panelUp .25s ease-out; }
@@ -360,21 +237,11 @@ summary.sgroup::before { content: "▸"; color: var(--muted); font-size: 11px; t
 .sbaddr b, .sbaddr small { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sbaddr b { font-size: 13px; }
 .sbaddr small { font-size: 11px; color: var(--muted); }
-#sbDevice { display: none; }
-@media (min-width: 700px) { #sbDevice { display: grid; } }
-.sbbar { position: relative; height: 2px; flex: none; }
-.sbbar i { position: absolute; left: 0; top: 0; height: 100%; width: 0; background: var(--accent); opacity: 0; }
-.sbbar.loading i { width: 85%; opacity: 1; transition: width 6s cubic-bezier(.1, .7, .3, 1); }
-.sbbar.done i { width: 100%; opacity: 0; transition: width .2s, opacity .4s .2s; }
-.sbstage { flex: 1; min-height: 0; display: flex; justify-content: center; background: #fff; }
-.sbstage iframe { flex: 1; width: 100%; height: 100%; border: 0; background: #fff; }
-.sbstage.phone { background: var(--bg); padding: 16px; }
-.sbstage.phone iframe { flex: none; width: 390px; max-width: 100%; border: 1px solid var(--line); border-radius: 24px; box-shadow: var(--shadow); }
 
 /* ---- LongCat 主按钮：品牌渐变 + 轻投影 ---- */
-.sendbtn, .lrow button, .locactions .primary, .save, .count {
+.sendbtn, .save, .count {
   background: var(--accent-grad); }
-.sendbtn, .lrow button, .locactions .primary { box-shadow: var(--accent-shadow); border-radius: 10px; }
+.sendbtn { box-shadow: var(--accent-shadow); border-radius: 10px; }
 .avatar { border: 1px solid var(--line); background: #fff; }
 .tab.active { color: var(--accent-strong); }
 
@@ -928,7 +795,6 @@ button.tshit:focus-visible { outline: 2px solid var(--accent); outline-offset: 3
 .tsmorebtn { align-self: flex-start; padding: 0; border: 0; background: none; color: var(--accent-strong); font-size: 13px; font-weight: 600; cursor: pointer; }
 .tsresult .reportcard { width: 100%; }
 .tsresult .gallery { margin-top: 0; }
-.tsresult .sitecard.slim { margin-top: 0; }
 
 /* ---- 目标（仿 Muse Goals）：「正在盯」每行是勾选框 + 标题 + 一句状态，没有别的按钮；已完成收起来；最下面是「新建目标」 ---- */
 .glist { flex: 1; overflow-y: auto; padding: 6px 20px 28px; display: flex; flex-direction: column; }

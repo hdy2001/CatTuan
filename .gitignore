@@ -28,7 +28,7 @@ sandbox/node_modules/
 sandbox/chrome/
 
 # ---- Agent 主目录：只放项目配置和技能（白名单），其余都是运行时数据 ----
-# 聊天数据库、记忆（用户画像）、账本、关注列表、日志、缓存、生成的网站、自动装的技能都不进仓库
+# 聊天数据库、记忆（用户画像）、日志、缓存、自动装的技能都不进仓库
 agent-home/*
 !agent-home/config.yaml
 !agent-home/SOUL.md

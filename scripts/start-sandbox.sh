@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 启动沙箱浏览器服务（:8660）。X / Instagram / Weverse 在国内要走代理：没设 SANDBOX_PROXY 时沿用 agent-home/.env 的 HTTPS_PROXY；
-# 微博、B 站始终直连。
+# 启动沙箱浏览器服务（:8660）。国外网站在国内要走代理：没设 SANDBOX_PROXY 时沿用 agent-home/.env 的 HTTPS_PROXY；
+# 国内站点始终直连。
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 

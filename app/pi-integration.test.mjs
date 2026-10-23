@@ -42,10 +42,10 @@ test('native Pi SDK runs a native business tool, replays SSE, and restores the t
       requests.push(body);
       if (req.url !== '/v1/chat/completions') throw new Error(`Unexpected model path: ${req.url}`);
       const last = body.messages.at(-1);
-      if (last.role === 'tool') return modelResponse(res, { content: '测试记账完成。' });
+      if (last.role === 'tool') return modelResponse(res, { content: '测试记忆完成。' });
       if (String(last.content).includes('延续测试')) return modelResponse(res, { content: '保留了上一轮上下文。' });
       modelResponse(res, { tool_calls: [{ index: 0, id: 'repeated-provider-call-id', type: 'function', function: {
-        name: 'ledger_add', arguments: JSON.stringify({ entries: [{ amount: 12.5, category: '餐饮', note: 'Pi 隔离测试' }] }),
+        name: 'memory', arguments: JSON.stringify({ action: 'add', target: 'memory', content: 'Pi 隔离测试' }),
       } }] }, 'tool_calls');
     } catch (error) {
       res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -54,8 +54,8 @@ test('native Pi SDK runs a native business tool, replays SSE, and restores the t
   });
   let gateway;
   try {
-    await writeFile(path.join(home, 'config.yaml'), 'platform_toolsets:\n  api_server: [ledger, skills, memory, session_search]\n');
-    await writeFile(path.join(home, 'SOUL.md'), '你是喵团。仅在这个隔离测试目录里记账。\n');
+    await writeFile(path.join(home, 'config.yaml'), 'platform_toolsets:\n  api_server: [skills, memory, session_search]\n');
+    await writeFile(path.join(home, 'SOUL.md'), '你是喵团。仅在这个隔离测试目录里写记忆。\n');
     const providerUrl = await listen(provider);
     const env = { PI_API_URL: `${providerUrl}/v1`, LONGCAT_API_KEY: 'fake-local-key' };
     const start = async () => {
@@ -72,14 +72,14 @@ test('native Pi SDK runs a native business tool, replays SSE, and restores the t
       assert.equal(response.status, 200);
       return (await response.json()).run_id;
     };
-    const runId = await createRun('记账隔离测试：午饭 12.5 元。');
+    const runId = await createRun('记忆隔离测试：记住 Pi 隔离测试。');
     const stream = await events(`${url}/v1/runs/${runId}/events`, 'test-gateway-key');
     assert.equal(stream.at(-1).event, 'run.completed', JSON.stringify(stream));
-    assert.equal(stream.at(-1).output, '测试记账完成。');
+    assert.equal(stream.at(-1).output, '测试记忆完成。');
     const began = stream.find((event) => event.event === 'tool.started');
     const ended = stream.find((event) => event.event === 'tool.completed');
-    assert.equal(began.tool, 'ledger_add');
-    assert.equal(began.args.entries[0].amount, 12.5);
+    assert.equal(began.tool, 'memory');
+    assert.equal(began.args.content, 'Pi 隔离测试');
     assert.equal(ended.tool_call_id, began.tool_call_id);
     assert.ok(began.tool_call_id.startsWith(`${runId}:`), 'Tool IDs must be isolated between runs and users');
     assert.equal(ended.error, false);
@@ -87,16 +87,14 @@ test('native Pi SDK runs a native business tool, replays SSE, and restores the t
     for (const event of stream) recordToolEvent(task, event);
     for (const event of stream) recordToolEvent(task, event);
     assert.equal(task.steps.length, 1, 'App steps remain unique when SSE events replay');
-    assert.equal(task.steps[0].name, 'ledger_add');
+    assert.equal(task.steps[0].name, 'memory');
     assert.equal(task.steps[0].status, 'done');
-    assert.equal(JSON.parse(ended.result).added[0].amount, 12.5);
-    const ledger = JSON.parse(await readFile(path.join(home, 'ledger/entries.json'), 'utf8'));
-    assert.equal(ledger.length, 1);
-    assert.equal(ledger[0].note, 'Pi 隔离测试');
+    assert.equal(JSON.parse(ended.result).success, true);
+    assert.match(await readFile(path.join(home, 'memories/MEMORY.md'), 'utf8'), /Pi 隔离测试/);
     assert.equal(requests.length, 2, 'Pi must complete a real model → tool → model loop');
     assert.deepEqual(requests[0].thinking, { type: 'disabled' });
     const toolNames = requests[0].tools.map((tool) => tool.function.name);
-    assert.ok(toolNames.includes('ledger_add'));
+    assert.ok(toolNames.includes('memory'));
     assert.ok(!toolNames.some((name) => ['bash', 'read', 'write', 'edit', 'terminal', 'delegate_task'].includes(name)));
     const replay = await events(`${url}/v1/runs/${runId}/events`, 'test-gateway-key', began.seq);
     assert.deepEqual(replay, stream.filter((event) => event.seq > began.seq));
@@ -108,7 +106,7 @@ test('native Pi SDK runs a native business tool, replays SSE, and restores the t
     const resumed = await events(`${url}/v1/runs/${followup}/events`, 'test-gateway-key');
     assert.equal(resumed.at(-1).event, 'run.completed', JSON.stringify(resumed));
     assert.ok(requests.at(-1).messages.some((message) => message.role === 'tool'), 'Persisted Pi conversation must include the previous tool result');
-    assert.ok(requests.at(-1).messages.some((message) => message.role === 'assistant' && message.content === '测试记账完成。'));
+    assert.ok(requests.at(-1).messages.some((message) => message.role === 'assistant' && message.content === '测试记忆完成。'));
   } finally {
     await gateway?.close();
     provider.closeAllConnections();

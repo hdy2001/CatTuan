@@ -1,13 +1,13 @@
 [Unit]
-Description=CatTuan 沙箱浏览器（:8660，大家共用一个；平台登录窗口开在虚拟显示 :99 上）
-After=network-online.target cattuan-xvfb.service
-Wants=network-online.target cattuan-xvfb.service
+Description=CatTuan 沙箱浏览器（:8660，大家共用一个无头 Chromium）
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 User=cattuan
 WorkingDirectory=/srv/cattuan
 EnvironmentFile=/etc/cattuan/cattuan.env
-Environment=TZ=Asia/Shanghai DISPLAY=:99
+Environment=TZ=Asia/Shanghai
 ExecStart=/srv/cattuan/scripts/start-sandbox.sh
 Restart=on-failure
 RestartSec=5

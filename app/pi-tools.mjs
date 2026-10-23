@@ -9,7 +9,7 @@ import { createWebTools } from './tools/web.mjs';
 import { createKnowledgeTools, knowledgeContext } from './tools/knowledge.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const DEFAULT_TOOLSETS = ['idol', 'vision', 'memory', 'session_search', 'ledger', 'skills', 'skillstore', 'deepsearch', 'sites', 'phone'];
+const DEFAULT_TOOLSETS = ['idol', 'vision', 'memory', 'session_search', 'skills', 'skillstore', 'deepsearch', 'phone'];
 const names = (value) => new Set(Array.isArray(value) ? value : typeof value === 'string' ? value.split(',').map((v) => v.trim()) : []);
 
 export function createToolContext({ home, sessionId = '', env = process.env, root = ROOT } = {}) {

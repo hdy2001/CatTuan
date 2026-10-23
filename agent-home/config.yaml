@@ -5,11 +5,9 @@ platform_toolsets:
     - vision
     - memory
     - session_search
-    - ledger
     - skills
     - skillstore
     - deepsearch
-    - sites
     - phone
 memory:
   memory_enabled: true

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 每天备份一次：账号库（app.db）、每个人的数据（聊天、任务、目标、上传的图、agent 的记忆 / 账本 / 网站 / 会话库），
+# 每天备份一次：账号库（app.db）、每个人的数据（聊天、任务、目标、上传的图、agent 的记忆 / 会话库），
 # 以及仓库里 agent-home 的运行时数据（管理员沿用本机数据时在这里）。
 # SQLite 库用 .backup 在线导出一份一致的快照，不直接拷正在写的库文件；缓存、日志不备份。
 # 用法：deploy/backup.sh（cattuan-backup.timer 每天 04:00 跑）。备份放在 $BACKUP_DIR，保留 $BACKUP_KEEP_DAYS 天。

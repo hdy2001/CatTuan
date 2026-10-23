@@ -1,9 +1,0 @@
-[Unit]
-Description=网页版 VNC（noVNC，只听 127.0.0.1:6080，经 SSH 隧道打开）：管理员在这里看到沙箱的登录窗口
-Requires=cattuan-vnc.service
-After=cattuan-vnc.service
-
-[Service]
-User=cattuan
-ExecStart=/usr/bin/websockify --web /usr/share/novnc 127.0.0.1:6080 127.0.0.1:5900
-Restart=on-failure

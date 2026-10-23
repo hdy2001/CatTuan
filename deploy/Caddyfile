@@ -1,6 +1,6 @@
-# /etc/caddy/Caddyfile：deploy/setup.sh 会把 APP_DOMAIN / SITES_DOMAIN 换成你的两个域名。
-# 两个域名都要先在 DNS 里解析到这台服务器，Caddy 会自动申请、续期 HTTPS 证书。
-# App、网站、沙箱、agent 都只听 127.0.0.1，对外只有这里的 80 / 443。
+# /etc/caddy/Caddyfile：deploy/setup.sh 会把 APP_DOMAIN 换成你的域名。
+# 域名要先在 DNS 里解析到这台服务器，Caddy 会自动申请、续期 HTTPS 证书。
+# App、沙箱、agent 都只听 127.0.0.1，对外只有这里的 80 / 443。
 
 # App：聊天、任务、目标都在这里
 APP_DOMAIN {
@@ -14,11 +14,4 @@ APP_DOMAIN {
 		# 聊天和任务进度靠 SSE 实时推，别缓冲
 		flush_interval -1
 	}
-}
-
-# agent 做的网页：单独的子域名，和 App 不同源，网页里的脚本碰不到 App 的接口
-SITES_DOMAIN {
-	encode gzip
-	header -Server
-	reverse_proxy 127.0.0.1:3211
 }

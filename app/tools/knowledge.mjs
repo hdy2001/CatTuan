@@ -360,11 +360,9 @@ async function visionAnalyze(ctx, args, signal) {
     const roots = [await realpath(ctx.home), path.resolve(ctx.home, '..', 'uploads')];
     if (ctx.uploadDir) roots.push(path.resolve(ctx.uploadDir));
     if (path.resolve(ctx.home) === path.resolve(ctx.root, 'agent-home')) roots.push(path.resolve(ctx.dataDir || path.join(ctx.root, 'app/data'), 'uploads'));
-    const sites = path.join(ctx.home, 'sites');
-    try { for (const entry of await readdir(sites, { withFileTypes: true })) if (entry.isDirectory() && !entry.isSymbolicLink() && /^[a-zA-Z0-9_-]+$/.test(entry.name)) roots.push(path.resolve(ctx.root, 'sandbox/shots', entry.name)); } catch (error) { if (error.code !== 'ENOENT') throw error; }
     const resolvedRoots = [];
     for (const root of roots) { try { resolvedRoots.push(await realpath(root)); } catch (error) { if (error.code !== 'ENOENT') throw error; } }
-    if (!resolvedRoots.some(root => isWithin(root, file))) throw new Error('只能读取此用户上传的图片、自己的文件或网站检查截图');
+    if (!resolvedRoots.some(root => isWithin(root, file))) throw new Error('只能读取此用户上传的图片或自己的文件');
     const info = await stat(file);
     if (!info.isFile() || info.size > MAX_IMAGE) throw new Error('图片不存在或超过 10 MiB');
     bytes = await readFile(file);

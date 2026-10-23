@@ -3,12 +3,8 @@ import { lookup as dnsLookup } from 'node:dns/promises';
 import http from 'node:http';
 import https from 'node:https';
 import { isIP } from 'node:net';
-import path from 'node:path';
-import { tool, readJson, writeJson, withFileLock } from './common.mjs';
+import { tool } from './common.mjs';
 
-const PLATFORMS = { weibo: '微博', x: 'X', instagram: 'Instagram', weverse: 'Weverse', bilibili: 'B 站', xiaohongshu: '小红书' };
-const ALIASES = { '微博': 'weibo', twitter: 'x', '推特': 'x', ig: 'instagram', ins: 'instagram', 'b站': 'bilibili', 'b 站': 'bilibili', bili: 'bilibili', '哔哩哔哩': 'bilibili', '小红书': 'xiaohongshu', xhs: 'xiaohongshu', '红书': 'xiaohongshu', rednote: 'xiaohongshu' };
-const platformProperty = { type: 'string', enum: Object.keys(PLATFORMS) };
 const object = (properties, required = []) => ({ type: 'object', properties, ...(required.length ? { required } : {}) });
 const str = (description) => ({ type: 'string', ...(description ? { description } : {}) });
 const photoId = (url) => createHash('sha1').update(url).digest('hex').slice(0, 8);
@@ -17,24 +13,6 @@ const cleanData = (value) => typeof value === 'string' ? cleanText(value) : Arra
 const abort = (signal) => signal?.throwIfAborted();
 const errorText = (err) => err?.message || String(err);
 const integer = (value, fallback) => Number.isFinite(Number(value)) && value ? Math.trunc(Number(value)) : fallback;
-
-function platform(value) {
-  const raw = String(value || 'weibo').trim().toLowerCase();
-  const result = ALIASES[raw] || raw;
-  if (!Object.hasOwn(PLATFORMS, result)) throw new Error(`不支持的平台：${value}（可选 ${Object.keys(PLATFORMS).join(', ')}）`);
-  return result;
-}
-
-function loginHint(label) {
-  return `${label} 还没登录：请在喵团 App「+」→「社媒账号」点「登录 ${label}」，在弹出的窗口里自己登录（建议用小号），登好后关掉窗口再叫我。`;
-}
-
-function failure(plat, data) {
-  const message = data.message || String(data.error);
-  if (data.error === 'login_required') return { error: 'login_required', login_needed: [{ platform: plat, hint: message }], hint: `把这句话转告用户：${message}` };
-  if (data.error === 'login_in_progress') return { error: data.error, hint: `${message}（告诉用户登录完关掉窗口后再试）` };
-  return { error: `沙箱请求失败：${message}` };
-}
 
 function ipv6Number(address) {
   const parts = address.toLowerCase().split('::');
@@ -171,8 +149,6 @@ export function parseImages(html, query) {
 }
 
 export function createWebTools(ctx) {
-  const accountFile = path.join(ctx.home, 'official_accounts.json');
-  const loadAccounts = async () => (await readJson(accountFile, [])).filter((entry) => entry && typeof entry === 'object').map((entry) => ({ ...entry, platform: entry.platform || 'weibo' }));
   const sandbox = async (endpoint, params = {}, signal, timeoutMs = 120000) => {
     const url = new URL(endpoint, ctx.env?.CATTUAN_SANDBOX_URL || 'http://127.0.0.1:8660');
     for (const [key, value] of Object.entries(params)) url.searchParams.set(key, String(value));
@@ -239,115 +215,8 @@ export function createWebTools(ctx) {
       if (photos.length < 6 * queries.length && days < 30) { days = 30; photos = await searchImages(queries, days, offset, signal); }
       return photos.length ? { queries, days, photos } : { queries, photos: [], hint: '没有结果，换个更短的关键词（比如只用名字）' };
     }, '搜索失败：')),
-    tool('official_account', 'idol', {
-      description: '管理用户关注的社媒账号（品牌、机构、媒体、博主、个人公开主页等任何公开账号都可以），支持微博(weibo)、X(x)、Instagram(instagram)、Weverse(weverse)、B 站(bilibili)、小红书(xiaohongshu，需登录)。action=find 在 platform 上按名字搜账号（返回认证信息和粉丝数）；action=follow 把账号加入关注列表（之后 official_photos 会读它）；action=unfollow 取消；action=list 列出已关注；action=status 查看各平台是否已在沙箱里登录。X / Instagram / Weverse 需要用户先在 App「+」→「社媒账号」点登录、在弹出的窗口里自己登录；没登录时返回 login_needed，把其中的 hint 原样转告用户，不要换别的平台冒充。同名账号多时，优先选认证信息是本人、品牌或机构官方的账号；用户点名某个具体账号就直接关注那个。uid：微博 / B 站用数字 id，X / Instagram 用用户名（不带 @），Weverse 用社区路径（weverse.io/ 后面那段，如 seventeen）。',
-      parameters: object({ action: { type: 'string', enum: ['find', 'follow', 'unfollow', 'list', 'status'] }, platform: { ...platformProperty, description: 'find/follow/unfollow：哪个平台（默认 weibo）。用户说推特就是 x，ins 就是 instagram' }, name: str('find：搜索的名字，例如「LongCat」「北京地铁」'), idol: str('follow：这个账号属于谁或什么主题（人名、品牌、话题），例如「LongCat」「北京地铁」'), uid: str('follow/unfollow：find 结果里的 uid'), account_name: str('follow：账号昵称') }, ['action']),
-    }, wrap(async (args, signal) => {
-      const { action } = args;
-      if (action === 'status') {
-        const data = await sandbox('/sessions', {}, signal, 90000);
-        if (data.error) return { error: data.message || data.error };
-        return { mode: data.mode, platforms: (data.platforms || []).map((p) => ({ platform: p.id, label: p.label, logged_in: p.loggedIn, needs_login: p.needsLogin, ...(p.needsLogin && !p.loggedIn ? { hint: loginHint(p.label) } : {}) })) };
-      }
-      const plat = platform(args.platform);
-      if (action === 'find') {
-        const name = (args.name || '').trim();
-        if (!name) return { error: 'find 需要 name' };
-        const data = await sandbox(`/${plat}/search_users`, { q: name }, signal, 90000);
-        return data.error ? failure(plat, data) : { platform: plat, candidates: data.users || [] };
-      }
-      return withFileLock(accountFile, async () => {
-        abort(signal);
-        let accounts = await loadAccounts();
-        if (action === 'list') return { accounts };
-        if (!['follow', 'unfollow'].includes(action)) return { error: `未知 action：${action}` };
-        const uid = String(args.uid || '').trim().replace(/^@+/, '');
-        if (!uid) return { error: `${action} 需要 uid` };
-        if (action === 'follow') {
-          accounts = accounts.filter((a) => !(a.platform === plat && a.uid.toLowerCase() === uid.toLowerCase()));
-          accounts.push({ platform: plat, uid, name: args.account_name || uid, idol: (args.idol || '').trim() });
-          abort(signal);
-          await writeJson(accountFile, accounts);
-          return { ok: true, accounts };
-        }
-        accounts = accounts.filter((a) => !((!args.platform || a.platform === plat) && a.uid.toLowerCase() === uid.toLowerCase()));
-        abort(signal);
-        await writeJson(accountFile, accounts);
-        return { ok: true };
-      }, signal);
-    }, '沙箱不可用或请求失败：')),
-    tool('official_photos', 'idol', {
-      description: '读取社媒账号最近 N 天发布的帖子（文字和原图），想知道某个账号最近发了什么、有没有新动态时用它，比搜索引擎更准更新。默认读已关注的账号；用户临时想看某个没关注的公开账号时，先 official_account find 拿到 uid，再把它放进 accounts 直接读，不用先关注。用户点名某个平台（X/推特、Instagram、Weverse、B 站、微博）时填 platform，只读那个平台。账号内容很杂时，用 keywords 过滤出相关的帖子（中文名、英文名等不同叫法都放进去）。返回 posts（帖子文本+图片 id）和 photos；选好后回复末尾写 `GALLERY: id1,id2,...`。返回 login_needed 时，把其中的 hint 告诉用户（去 App「+」→「社媒账号」点登录）。',
-      parameters: object({ accounts: { type: 'array', description: '直接读这些账号（不用先关注），uid 来自 official_account find 的结果；填了就不读关注列表', items: object({ platform: platformProperty, uid: str(), name: str() }, ['platform', 'uid']) }, platform: { ...platformProperty, description: '只读这个平台的账号；不填读全部已关注账号' }, idol: str('只读 follow 时 idol 填了这个值的账号；不填则读全部'), days: { type: 'integer', description: '最近多少天（默认 7，最多 30）' }, keywords: { type: 'array', items: str(), description: '帖子文本需包含其中任一词，例如 ["发布会", "launch"]；不填不过滤' } }),
-    }, wrap(async (args, signal) => {
-      const days = Math.min(30, Math.max(1, integer(args.days, 7)));
-      const keywords = (args.keywords || []).filter((k) => typeof k === 'string' && k.trim()).map((k) => k.toLowerCase());
-      const plat = args.platform ? platform(args.platform) : null;
-      let accounts;
-      if (args.accounts?.length) {
-        accounts = args.accounts.filter((a) => a && typeof a === 'object').map((a) => ({ platform: platform(a.platform), uid: String(a.uid || '').trim(), name: a.name || String(a.uid || '') })).filter((a) => a.uid).slice(0, 6);
-        if (!accounts.length) return { error: 'accounts 里要有 platform 和 uid（先用 official_account find 拿 uid）' };
-      } else {
-        accounts = (await loadAccounts()).filter((a) => !plat || a.platform === plat);
-        if (!accounts.length) return { error: `还没有关注${plat ? ` ${PLATFORMS[plat]} 上的` : '任何'}账号：先 official_account find（platform=${plat || 'weibo'}）拿到 uid，再 follow，或者把它放进 accounts 直接读` };
-        const filtered = accounts.filter((a) => !args.idol?.trim() || a.idol === args.idol.trim());
-        if (filtered.length) accounts = filtered;
-      }
-      if (plat) accounts = accounts.filter((a) => a.platform === plat);
-      const found = [], errors = [], notes = [], logins = new Map();
-      for (const account of accounts) {
-        abort(signal);
-        if (logins.has(account.platform)) continue;
-        let data;
-        try { data = await sandbox(`/${account.platform}/timeline`, { uid: account.uid, days, name: account.name || '' }, signal, 90000); }
-        catch (err) { abort(signal); errors.push(`${PLATFORMS[account.platform]} ${account.name}: ${errorText(err)}`); continue; }
-        if (data.error === 'login_required') { logins.set(account.platform, data.message || loginHint(PLATFORMS[account.platform])); continue; }
-        if (data.error) { errors.push(`${PLATFORMS[account.platform]} ${account.name}: ${data.message || data.error}`); continue; }
-        if (data.note) notes.push(data.note);
-        for (const post of data.posts || []) if (!keywords.length || keywords.some((k) => String(post.text || '').toLowerCase().includes(k))) found.push([account.platform, post]);
-      }
-      found.sort((a, b) => (Number(b[1].ts) || 0) - (Number(a[1].ts) || 0));
-      const posts = [], photos = [], seen = new Set();
-      for (const [p, post] of found) {
-        if (photos.length >= 40) break;
-        const ids = [];
-        for (const image of post.images || []) {
-          if (!image.large) continue;
-          const id = photoId(image.large);
-          if (seen.has(id)) { ids.push(id); continue; }
-          if (photos.length >= 40) break;
-          ids.push(id); seen.add(id);
-          photos.push({ id, title: String(post.text || '').slice(0, 50), site: p === 'weverse' ? `${PLATFORMS[p]} · ${post.author}` : `${PLATFORMS[p]} @${post.author}`, image: image.large, thumb: image.thumb, page: post.url, at: post.at });
-        }
-        posts.push({ post: post.post_id, platform: p, account: post.author, at: String(post.at || '').slice(0, 16), text: post.text, photos: ids });
-      }
-      return { days, posts, photos, ...(logins.size ? { login_needed: [...logins].map(([p, hint]) => ({ platform: p, hint })) } : {}), ...(errors.length ? { errors } : {}), ...(notes.length ? { notes } : {}), ...(!posts.length ? { hint: logins.size && logins.size === new Set(accounts.map((a) => a.platform)).size ? '这些平台需要先登录，把 login_needed 里的 hint 转告用户' : '这些账号这段时间没有符合条件的帖子，可以放宽 days、去掉 keywords，或改用搜索' } : {}) };
-    })),
-    tool('xiaohongshu_search', 'idol', {
-      description: '按关键词搜小红书笔记（需要用户在 App「+」→「社媒账号」登录小红书）。适合：附近美食/店铺/景点/攻略、某个活动或地点的实拍、经验分享、攻略测评等任何「去小红书搜一下」的事。问「附近」时，用【用户当前位置】里的街道或区名拼关键词，例如「望京 美食」「朝阳区 咖啡」；只写城市太宽。返回笔记标题、作者、点赞数、发布时间、链接和封面图 id；挑好后回复末尾写 `GALLERY: id1,id2,...`。笔记是网友分享，不是官方信息，转述时说清楚。返回 login_needed 时把 hint 原样告诉用户。',
-      parameters: object({ query: str('搜索词，例如「望京 美食」「音乐节 上海 返图」'), sort: { type: 'string', enum: ['general', 'latest', 'popular'], description: 'general 综合（默认）、latest 最新、popular 最热' }, count: { type: 'integer', description: '返回多少条（默认 12，最多 20）' } }, ['query']),
-    }, wrap(async ({ query = '', sort, count }, signal) => {
-      query = query.trim();
-      if (!query) return { error: 'query 不能为空' };
-      sort = ['general', 'latest', 'popular'].includes(sort) ? sort : 'general';
-      count = Math.min(20, Math.max(1, integer(count, 12)));
-      const data = await sandbox('/xiaohongshu/search_notes', { q: query, sort }, signal);
-      if (data.error === 'login_required') return { login_needed: { xiaohongshu: data.message || loginHint('小红书') } };
-      if (data.error) return { error: data.message || data.error };
-      const notes = [], photos = [];
-      for (const note of (data.notes || []).slice(0, count)) {
-        const ids = [];
-        for (const image of (note.images || []).slice(0, 1)) {
-          if (!image.large) continue;
-          const id = photoId(image.large); ids.push(id);
-          photos.push({ id, title: String(note.text || '').slice(0, 50), site: `小红书 @${note.author}`, image: image.large, thumb: image.thumb || image.large, page: note.url, at: note.at });
-        }
-        notes.push({ note: note.post_id, title: note.text, author: note.author, likes: note.likes, at: String(note.at || '').slice(0, 10), url: note.url, photos: ids });
-      }
-      return { query, sort, notes, photos, ...(!notes.length ? { hint: '没搜到，换个说法试试（比如换成区名，或去掉太具体的词）' } : {}) };
-    }, '沙箱不可用：')),
     tool('fetch_url', 'skillstore', {
-      description: '只读地打开一个公开网址（GET），返回正文文本或 JSON（最多约 1.2 万字）。给技能用：查天气（wttr.in?format=j2）、汇率、公开 API、文章正文。不能访问内网地址，不能提交表单或登录。社媒平台请用 official_photos / xiaohongshu_search，不要用它抓。',
+      description: '只读地打开一个公开网址（GET），返回正文文本或 JSON（最多约 1.2 万字）。给技能用：查天气（wttr.in?format=j2）、汇率、公开 API、文章正文。不能访问内网地址，不能提交表单或登录。不要用它抓社媒平台。',
       parameters: object({ url: str('http(s) 网址') }, ['url']),
     }, wrap(async ({ url = '' }, signal) => {
       const response = await fetchPublic(url.trim(), { signal });

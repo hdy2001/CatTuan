@@ -29,7 +29,6 @@ function start(u) {
     env: {
       ...inherited, CATTUAN_HOME: home, PI_HOME: home,
       CATTUAN_APP_URL: process.env.CATTUAN_APP_URL || `http://127.0.0.1:${PORT}`, // phone_call 通过 App 执行授权过的外呼
-      CATTUAN_SITES_URL: process.env.SITES_ORIGIN || process.env.CATTUAN_SITES_URL || 'http://localhost:3211', // publish_site 返回的网址
     },
   });
   fs.closeSync(out);

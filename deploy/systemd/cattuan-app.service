@@ -1,5 +1,5 @@
 [Unit]
-Description=CatTuan App（调度者 + Web App :3210 + 网站 :3211）
+Description=CatTuan App（调度者 + Web App :3210）
 After=network-online.target cattuan-sandbox.service cattuan-agents.service
 Wants=network-online.target
 
@@ -7,7 +7,7 @@ Wants=network-online.target
 User=cattuan
 WorkingDirectory=/srv/cattuan
 EnvironmentFile=/etc/cattuan/cattuan.env
-# 目标「每天 21:30」、记账日期都按本地时间算：云服务器默认常是 UTC
+# 目标「每天 21:30」这类时间按本地时间算：云服务器默认常是 UTC
 Environment=TZ=Asia/Shanghai
 ExecStart=/srv/cattuan/scripts/start-app.sh
 Restart=on-failure

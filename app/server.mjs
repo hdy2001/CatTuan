@@ -1,12 +1,11 @@
 import { recordToolEvent } from './pi-events.mjs';
 // CatTuan BFF —— Muse 式「调度者 + 后台执行 agent」：
 //   调度者（dispatcher）：直接调 LongCat、不带工具，几秒内用聊天口吻短回复，并决定要不要派后台任务。
-//   执行 agent（executor）：Pi SDK（搜索 / 社媒账号 / 做网页 / 识图 / 记账 / 记忆工具），在后台跑，App 关了也继续。
+//   执行 agent（executor）：Pi SDK（搜索 / 读网页 / 搜图 / 识图 / 打电话 / 记忆工具），在后台跑，App 关了也继续。
 //   任务完成后，调度者把结果转成聊天消息发回来；聊天、任务、目标都存在服务端，经 SSE 推给 App。
 //   目标（goal，仿 Muse Goal）：持续运行、定期检查的后台目标，有新进展才在聊天里说，目标列表显示最新状态。
-//   记账：调度者能直接记账；账本与执行 agent 的 ledger 工具共用这个人主目录下的 ledger/，AI 自动维护「记账管家」目标。
 //   多人：账号见 app/accounts.mjs（只能邀请，scripts/user.mjs 管）；每个人的聊天、任务、目标存在 <数据目录>/users/<id>/，
-//   执行 agent 每人一个（沿用各自的 CATTUAN_HOME 数据路径，见 app/homes.mjs，由 scripts/agents.mjs 守护）；沙箱浏览器大家共用，平台由管理员登录。
+//   执行 agent 每人一个（沿用各自的 CATTUAN_HOME 数据路径，见 app/homes.mjs，由 scripts/agents.mjs 守护）；沙箱浏览器大家共用。
 // BFF 本身只用 Node 内置库；Pi SDK 在独立 gateway 中运行。
 import http from 'node:http';
 import fs from 'node:fs';
@@ -21,9 +20,6 @@ import { fileURLToPath } from 'node:url';
 import { openAccounts } from './accounts.mjs';
 import { TEMPLATE, dataDir, userDir, homeOf, agentOf, readEnvFile } from './homes.mjs';
 import { placeCall, listCalls, CALL_LINE } from './calls.mjs';
-import { createToolContext } from './pi-tools.mjs';
-import { scanSkills, loadSkill } from './tools/knowledge.mjs';
-import { withFileLock } from './tools/common.mjs';
 
 const APP_DIR = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(APP_DIR, 'public');
@@ -36,13 +32,8 @@ const LONGCAT_URL = 'https://api.longcat.chat/openai/v1/chat/completions';
 const DISPATCH_MODEL = process.env.DISPATCH_MODEL || 'LongCat-2.5-Preview';
 const PORT = Number(process.env.PORT || 3210);
 const HOST = process.env.HOST || '127.0.0.1'; // 线上也只听本机，由 Caddy 反代出去
-// 对外地址：放到 HTTPS 反代后面时设成 https://app.example.com（来源校验、网站的 CSP 都按它来）；本机开发不用设。
+// 对外地址：放到 HTTPS 反代后面时设成 https://app.example.com（来源校验按它来）；本机开发不用设。
 const PUBLIC_ORIGIN = (process.env.PUBLIC_ORIGIN || '').replace(/\/+$/, '');
-const APP_ORIGINS = PUBLIC_ORIGIN ? [PUBLIC_ORIGIN] : [`http://localhost:${PORT}`, `http://127.0.0.1:${PORT}`];
-// 网站：执行 agent 的 publish_site 写到这个人主目录的 sites/<id>/，App 在单独端口上提供（和 App 不同源）。
-const SITES_PORT = Number(process.env.SITES_PORT || PORT + 1);
-// 网站的对外地址：线上是单独的子域名（https://sites.example.com），和 App 不同源；本机是 :3211。
-const SITES_ORIGIN = (process.env.SITES_ORIGIN || `http://localhost:${SITES_PORT}`).replace(/\/+$/, '');
 // 后台任务并发：全局最多几个同时跑（沙箱浏览器是串行的，开多了也只是排队），每人最多几个，轮流取
 const MAX_RUNNING = Number(process.env.MAX_RUNNING || 4);
 const MAX_RUNNING_PER_USER = Number(process.env.MAX_RUNNING_PER_USER || 2);
@@ -63,16 +54,13 @@ const MIME = {
   '.webmanifest': 'application/manifest+json',
 };
 const STEP_LABEL = {
-  official_photos: '看社媒账号', official_account: '找社媒账号', idol_photo_search: '搜图片', memory: '翻记忆',
-  session_search: '翻聊天记录', vision_analyze: '看图',
-  ledger_query: '查账', ledger_add: '记账', ledger_delete: '删账', ledger_memory: '整理记账记忆',
+  idol_photo_search: '搜图片', memory: '翻记忆', session_search: '翻聊天记录', vision_analyze: '看图',
   deep_web_search: '网页搜索', read_webpage: '读网页', skill_view: '翻技能手册', skill_store: '找技能', fetch_url: '读网址',
-  publish_site: '发布网页', read_site: '读网站源码', check_site: '检查网页', phone_call: '打电话',
-  skills_list: '看技能列表',
+  phone_call: '打电话', skills_list: '看技能列表',
 };
 
 // ---------- 每个人的状态（服务端持久化）：<数据目录>/users/<id>/state.json ----------
-// 聊天、消息、任务、目标、位置、统计都按人分开存。任务、目标上记着 uid，后台流程（任务队列、目标调度、
+// 聊天、消息、任务、目标、统计都按人分开存。任务、目标上记着 uid，后台流程（任务队列、目标调度、
 // agent 推来的工具调用、沙箱的实时画面）凭它找回是谁的；上传的图、浏览回放也放在各自的目录下。
 const readJson = (file, fallback) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return fallback; } };
 const newId = (p) => `${p}_${Date.now().toString(36)}${crypto.randomBytes(3).toString('hex')}`;
@@ -89,6 +77,10 @@ function loadUser(row) {
   const state = { messages: [], tasks: [], goals: [], chats: [], ...readJson(path.join(dir, 'state.json'), {}) };
   delete state.feed; // 「动态」已由目标取代
   delete state.activity; // 「喵团动态」已删掉，以前存下的记录不要了
+  delete state.location; // 位置功能已删掉
+  state.goals = state.goals.filter((g) => g.kind !== 'ledger'); // 记账已删掉：AI 维护的「记账管家」目标不要了
+  for (const m of state.messages) delete m.sites; // 网站已删掉：消息上挂的网站卡片不要了
+  for (const t of state.tasks) if (t.result) delete t.result.sites;
   const u = { id: row.id, name: row.name, role: row.role, status: row.status, dir, home: homeOf(row), state, clients: new Set(), activity: [], saveTimer: null };
   users.set(u.id, u);
   for (const x of [...state.tasks, ...state.goals]) x.uid = u.id; // 单用户版的老数据上没有 uid
@@ -122,13 +114,6 @@ function loadUser(row) {
     const t = m.report && state.tasks.find((x) => x.id === m.taskId);
     if (t?.result?.text) m.report = { title: t.title, ...(m.report.kind === 'result' ? resultCard(t.result.text) || m.report : parseReport(t.result.text)) };
   }
-  // 发布网页功能上线前，agent 把整页 HTML 贴在了回复里：补发布成网站，挂到那条结果消息上。
-  for (const t of state.tasks) {
-    if (t.status !== 'done' || !t.result?.text || t.result.sites?.length) continue;
-    t.result = rescueHtmlSite(u, t.result, t.title);
-    const m = t.result.sites?.length && state.messages.findLast((x) => x.role === 'bot' && x.taskId === t.id);
-    if (m && !m.sites?.length) m.sites = t.result.sites;
-  }
   // 清掉已经不在任务列表里的回放帧
   try {
     const keep = new Set(state.tasks.map((t) => t.id));
@@ -148,7 +133,7 @@ function writeState(u) {
     // 每个聊天最多留最近 300 条
     messages: s.chats.flatMap((c) => s.messages.filter((m) => m.chatId === c.id).slice(-300)),
     chats: s.chats, currentChat: s.currentChat, stats: s.stats,
-    tasks: s.tasks.slice(-80), goals: s.goals, location: s.location,
+    tasks: s.tasks.slice(-80), goals: s.goals,
     pendingCall: s.pendingCall, // 待确认的电话：App 重启后用户回「打吧」还认得
   }));
   fs.renameSync(`${file}.tmp`, file);
@@ -347,8 +332,8 @@ function addMessage(u, m) {
   return msg;
 }
 
-// ---------- 聊天：可以开新聊天、删旧聊天；后台任务、目标、记账、网站是所有聊天共用的 ----------
-const WELCOME = '嗨～我是喵团，你的私人助理 🐱 查资料、找附近好去处、做网页、记账、帮你盯着关心的事，都可以交给我～';
+// ---------- 聊天：可以开新聊天、删旧聊天；后台任务、目标是所有聊天共用的 ----------
+const WELCOME = '嗨～我是喵团，你的私人助理 🐱 查资料、找图、打电话问问、帮你盯着关心的事，都可以交给我～';
 const NEW_CHAT_TITLE = '新聊天';
 
 function newChat(u) {
@@ -446,40 +431,22 @@ function parseJsonLoose(raw) {
   try { return JSON.parse(text.slice(start, end + 1) + stack.reverse().join('')); } catch { return null; }
 }
 
-// 平台登录怎么跟用户说：管理员自己能在「社媒账号」里点登录；普通成员登录不了（沙箱浏览器大家共用，平台账号由管理员统一登录）
-const LOGIN_TALK = {
-  admin: {
-    hint: '平台没登录时，就让用户去「+」→「社媒账号」登录。',
-    rule: '- 平台登录：X / Instagram / Weverse / 小红书 要用户先在「+」→「社媒账号」点「登录」、在弹出的窗口里自己登录。用户要看这些平台的内容、而【平台登录】显示它未登录时，不派任务，reply 直接引导，比如「X 还没登录哦，去「+」→「社媒账号」点「登录 X」，在弹出的窗口里自己登一下（建议小号），好了再叫我～」。',
-    say: '- 结果里说某个平台需要登录（或被风控）时，一定要说去「+」→「社媒账号」点「登录 X」（换成对应平台），这句不能省。',
-  },
-  member: {
-    hint: '平台没登录时，就告诉用户这个平台要等管理员登录。',
-    rule: '- 平台登录：X / Instagram / Weverse / 小红书 的账号由管理员统一登录，用户自己登录不了。用户要看这些平台的内容、而【平台登录】显示它未登录时，不派任务，reply 直接说明，比如「X 这边还没登录，得等管理员登一下，你可以跟管理员说一声～」。',
-    say: '- 结果里说某个平台需要登录（或被风控）时，一定要说这个平台要等管理员登录一下，这句不能省。',
-  },
-};
-const loginTalk = (u) => LOGIN_TALK[u?.role] || LOGIN_TALK.member;
-
-const DISPATCHER_SYSTEM = (L) => `你是「喵团」的前台，用户的朋友，像朋友发微信一样聊天。
+const DISPATCHER_SYSTEM = `你是「喵团」的前台，用户的朋友，像朋友发微信一样聊天。
 - 回复要短：通常 1 句，最多 2 句；口语化，可以带语气词或颜文字；不用列表、不用 markdown，不解释你怎么做。
-- 先分清用户是在「问」还是在「让你做」：只是问你知不知道、是什么、怎么样、靠不靠谱、多少钱 → search（常识直接答）；让你去做（帮我找、去搜、看看某个账号、盯着、做网页、记账、调研）→ 派任务 / 目标 / 记账。【后台任务】里以前派过类似的任务，不代表这次也要派。
-- 后台执行 agent 能做的事：上网搜索、读网页、深度调研写报告；做网页；读微博 / X / Instagram / Weverse / B 站 / 小红书上任何公开账号（品牌、机构、博主、个人公开主页都行，关不关注都能读）；按关键词搜小红书笔记（附近美食、店铺、景点、攻略、打卡地……问「附近」时结合【用户位置】）；搜图片；识别图片；查天气等实用信息（缺技能会自己装）；记账查账；记住用户偏好。不要对用户说「看不了这个账号」「搜不了附近」这类话；${L.hint}
-- 普通搜索（search）：用户随口问一句、上网查一下就能答的（「你知道 X 吗」「X 是什么」「X 多少钱」「X 最近怎么样」「某家店 / 某个品牌 / 某个人是谁」），写 search，不派任务：query 填最可能搜到的搜索词（3–8 个词，带上关键限定，比如平台名、城市）。即使问的是小红书上的店或博主，只要是「你知道…吗」「…怎么样」这类了解性的问题，也先用普通搜索，不派任务；App 会马上搜网页再回答，搜不到会告诉用户还能去小红书上搜、深度搜索等。例：「你知道小红书上的蓝果中古首饰吗」→ search「蓝果中古首饰 小红书」，task 填 null。写 search 时 reply 填 null。
-- 你自己不能搜图、不能看社媒账号、不能记东西、不能看图片内容。凡是需要这些的（查天气、找图、搜小红书笔记、找附近的吃喝玩乐、关注/取关或查看公开账号、记住偏好、识别用户发的图、查动态），派一个后台任务给执行 agent，reply 里只简短说你去办了，比如「好嘞，我去查查～」。用户明确说「去小红书上搜」「帮我在小红书上找」时派任务，不用 search。
-- 做网页：执行 agent 能把内容做成一个网页（可视化网站、导游图、攻略页、对比表、清单、行程、H5 小页面），做好后聊天里会出现网站卡片，用户在 App 里点开就能看。用户要网站/网页/可视化时派任务，brief 写清楚内容、用途和想要的样子；内容还要查的，把要查什么也写进 brief，让执行 agent 查完再做。要改【网站】里已有的网站时，brief 里写上它的 id。
+- 先分清用户是在「问」还是在「让你做」：只是问你知不知道、是什么、怎么样、靠不靠谱、多少钱 → search（常识直接答）；让你去做（帮我找、去搜、盯着、调研、打电话）→ 派任务 / 目标。【后台任务】里以前派过类似的任务，不代表这次也要派。
+- 后台执行 agent 能做的事：上网搜索、读网页、深度调研写报告；搜图片；识别图片；查天气等实用信息（缺技能会自己装）；打电话；记住用户偏好。它读不了社媒账号、做不了网页、不能记账，用户要这些时直接说现在还不支持。
+- 普通搜索（search）：用户随口问一句、上网查一下就能答的（「你知道 X 吗」「X 是什么」「X 多少钱」「X 最近怎么样」「某家店 / 某个品牌 / 某个人是谁」），写 search，不派任务：query 填最可能搜到的搜索词（3–8 个词，带上关键限定，比如平台名、城市）。App 会马上搜网页再回答，搜不到会告诉用户还能深度搜索。例：「你知道蓝果中古首饰吗」→ search「蓝果中古首饰」，task 填 null。写 search 时 reply 填 null。
+- 你自己不能搜图、不能记东西、不能看图片内容。凡是需要这些的（查天气、找图、找吃喝玩乐、记住偏好、识别用户发的图），派一个后台任务给执行 agent，reply 里只简短说你去办了，比如「好嘞，我去查查～」。
 - 闲聊、情绪回应、问任务进度：直接回复，不派任务。问进度时根据【后台任务】回答。
 - 不要凭记忆回答事实：问到具体的店、品牌、产品、博主、人物、事件、价格、地址、营业时间、新闻这类事，你的记忆很可能是错的或过时的，一律写 search 去查，不要在 reply 里直接回答，也不要说「知道呀」然后编内容；就算【最近聊天】里你以前这样回答过，也要重新 search，不要照搬。只有常识（比如「中古首饰是什么意思」）可以直接答。
 - 【最近聊天】里「任务 t_xxx 的结果」后面是那个任务查到的内容（卡片全文、每通电话的结果，太长的是节选），是查证过的：用户问里面有的事（「第 3 家电话多少」「他们说的啥」「哪家有位」「最便宜的是哪家」），直接照着答，可以按家说，不用 search、不派任务、不改任务；里面没有的才去查。
 - 同一件事已经有任务在跑或排队，就不要重复派。
-- 改任务（steer）：用户是在对【后台任务】里某个排队中、进行中或刚结束的任务提修改（「不要…」「换成…」「再加上…」「这个不好」「改成…」「重做一下」「顺便也…」），写 steer，不要派新任务：task_id 填那个任务的 id，instruction 写清楚要怎么改（完整、脱离聊天也能看懂），只写用户这次说的修改，不要自己添加用户没提的要求（比如用户没说就别加「做成网站」）。进行中的会被插话调整，做完的会在原任务上接着改一轮。reply 简短说你让它改了，比如「收到，让它换成真地图，不用重来～」。分不清改的是哪个任务就先问一句，不写 steer。明显是另一件新事，或者是很久以前的老任务，才派新任务。目标检查（·目标检查）不能 steer。
+- 改任务（steer）：用户是在对【后台任务】里某个排队中、进行中或刚结束的任务提修改（「不要…」「换成…」「再加上…」「这个不好」「改成…」「重做一下」「顺便也…」），写 steer，不要派新任务：task_id 填那个任务的 id，instruction 写清楚要怎么改（完整、脱离聊天也能看懂），只写用户这次说的修改，不要自己添加用户没提的要求。进行中的会被插话调整，做完的会在原任务上接着改一轮。reply 简短说你让它改了，比如「收到，让它换成真地图，不用重来～」。分不清改的是哪个任务就先问一句，不写 steer。明显是另一件新事，或者是很久以前的老任务，才派新任务。目标检查（·目标检查）不能 steer。
 - 停止（stop）：用户说「别弄了」「不用了」「先停一下」时，stop 填那个排队中或进行中任务的 id；reply 简短确认。
-${L.rule}
 - brief 写给执行 agent，要完整、能独立执行：做什么、涉及的人或事物（中文名/外文名）、时间范围、地点、用户偏好；找图时写上要避开已经展示过的图（给出 id）。
-- category 按用户要办的事选一类（任务列表上显示成不同的图标）：life 生活（吃喝玩乐、出行、天气、购物、记账、健康、提醒、打电话订位）、work 工作学习（调研、报告、行业和公司、新闻资讯、学习资料、写东西）、coding 编程（写代码、做网页网站、小游戏、技术问题）、social 社交（社媒账号和博主、朋友家人、送礼、聚会、追星）。
-- 接着之前的结果做（「给这些店打电话」「把刚才那几家做成网页」「第 3 家再查查」）：执行 agent 每个任务都是新开的，看不到之前任务的结果。task 的 from 填【后台任务】或【最近聊天】里那个任务的 id（几个就写数组），App 会把它的完整结果原样附给执行 agent。brief 里不用抄店名、电话、地址（你看到的可能是节选，抄也容易抄错），写「打给结果里的那几家」「结果里的第 3 家」就行；只要其中几家时写清是哪几家。结果里没有的店名、电话不要凭记忆补。
-- 记账：用户说了一笔收支（如「午饭35」「打车 22 块」「发工资 8000」），直接写进 ledger，reply 简短确认（如「记好啦，午饭 ¥35」），不派任务。查账、分析消费、设预算这类派任务（执行 agent 有记账工具和记账记忆）。
-- 位置：【用户位置】是用户在 App 里共享的大致位置。用户问「我在哪」「附近」「这边」时以它为准，派任务时把位置写进 brief；没共享时，简短提醒用户可以在「+」→「位置」里共享，不要猜他在哪。
+- category 按用户要办的事选一类（任务列表上显示成不同的图标）：life 生活（吃喝玩乐、出行、天气、购物、健康、提醒、打电话订位）、work 工作学习（调研、报告、行业和公司、新闻资讯、学习资料、写东西）、coding 编程（写代码、技术问题）、social 社交（朋友家人、送礼、聚会、追星）。
+- 接着之前的结果做（「给这些店打电话」「第 3 家再查查」）：执行 agent 每个任务都是新开的，看不到之前任务的结果。task 的 from 填【后台任务】或【最近聊天】里那个任务的 id（几个就写数组），App 会把它的完整结果原样附给执行 agent。brief 里不用抄店名、电话、地址（你看到的可能是节选，抄也容易抄错），写「打给结果里的那几家」「结果里的第 3 家」就行；只要其中几家时写清是哪几家。结果里没有的店名、电话不要凭记忆补。
+- 附近：你不知道用户在哪。用户问「附近」「这边」又没说在哪时，先问一句在哪个城市、哪一片，不要猜。
 - 深度搜索：用户要你全面查清楚、调研、对比、找资料或找途径（不是一两句就能答的事），task 里写 "research": true；brief 写清楚要回答的问题、范围和希望得到的结论。reply 说一句你去深挖一下。
 - 版权：用户要免费下载或看付费内容（杂志、书、课程、影视的 PDF、网盘资源、破解版）时，照样派深度搜索，但 brief 写明「只找合法的免费或低价途径（图书馆数字资源、官方免费内容、正版优惠），不找盗版下载链接」；reply 里轻松说一句盗版链接不帮找，但会帮他找合法免费看的办法。
 - 目标：用户想长期持续关注某件事（「帮我盯着…」「以后每天…」「有新的就告诉我」），建一个 goal，它会定期自动检查，有新进展时会主动告诉用户；reply 简短说你会一直盯着。schedule 用 {"every": 分钟数} 或 {"at": "HH:MM"}，没说频率就 {"every": 360}。【目标】里已有同类目标（没完成的）就不要重复建。
@@ -492,19 +459,13 @@ ${L.rule}
   · 打完以后用户问结果（「他们说的啥」「哪家有位」「多少钱」）：照【最近聊天】里每通电话的结果直接答，不要派任务、不要 steer 让它重打——每个号码每天最多打 2 次，没打通的 App 会自动重拨。用户明确要再打一次才派。
   · brief 写清：打给谁（店名、电话；之前任务搜到的店写 from，不用抄；之前没搜过就让执行 agent 先搜）、要办的事、日期时间人数项目、要问清的事（价格、付款方式）、碰到哪些情况不答应先回来问（只能约别的时间、要定金、要本人通话）。要问几家就写清问几家、每家问什么。
 只输出一个 JSON，没有的字段填 null：
-{"reply": "...", "search": {"query": "..."}, "task": {"title": "不超过 12 个字", "brief": "...", "category": "life", "research": false, "call": null, "from": null}, "ask": {"questions": [{"tab": "不超过 6 个字", "label": "问题", "options": ["选项", "选项"]}]}, "call_confirm": {"title": "不超过 12 个字", "brief": "...", "from": null}, "call_go": false, "call_cancel": false, "steer": {"task_id": "t_xxx", "instruction": "..."}, "stop": "t_xxx", "goal": {"title": "不超过 12 个字", "brief": "每次检查做什么、关注谁、什么算新进展", "schedule": {"every": 360}}, "goal_done": ["g_xxx"], "ledger": [{"type": "expense 或 income", "amount": 35, "category": "餐饮", "note": "午饭", "date": null}], "ledger_delete": ["l_xxx"]}
-ledger 的 date 默认填 null（表示今天），只有用户明确说了别的日子（如「昨天」）才按【现在】换算成 YYYY-MM-DD。
-ledger 只写【用户新消息】里新说的收支；【今日账目】里已有的、聊天记录里之前提过的都不要再写，否则会重复记账。
-删账：用户明确要删某几笔（或对你「要删掉吗」回答肯定）时，在 ledger_delete 里填【今日账目】中对应的 id 数组；不确定是哪笔就先问。没有就填 null。
-支出分类：餐饮、交通、购物、娱乐、旅行、居住、医疗、学习、人情、其他；收入分类：工资、副业、红包、其他。`;
+{"reply": "...", "search": {"query": "..."}, "task": {"title": "不超过 12 个字", "brief": "...", "category": "life", "research": false, "call": null, "from": null}, "ask": {"questions": [{"tab": "不超过 6 个字", "label": "问题", "options": ["选项", "选项"]}]}, "call_confirm": {"title": "不超过 12 个字", "brief": "...", "from": null}, "call_go": false, "call_cancel": false, "steer": {"task_id": "t_xxx", "instruction": "..."}, "stop": "t_xxx", "goal": {"title": "不超过 12 个字", "brief": "每次检查做什么、关注谁、什么算新进展", "schedule": {"every": 360}}, "goal_done": ["g_xxx"]}`;
 
-const COMPLETION_SYSTEM = (L) => `你是「喵团」的前台，用户的私人助理。后台任务刚结束，像真人发微信一样把结果告诉用户。
-- 直接给信息：结论、名字、数字、价格、时间、下一步。不说客套和过渡（「搞定啦」「帮你查好了」「希望对你有帮助」），不复述用户的问题，不说「点下面的卡片」「详情见报告」这类指引——图片、网站、研究报告、结果卡片会自动附在消息下面。
+const COMPLETION_SYSTEM = `你是「喵团」的前台，用户的私人助理。后台任务刚结束，像真人发微信一样把结果告诉用户。
+- 直接给信息：结论、名字、数字、价格、时间、下一步。不说客套和过渡（「搞定啦」「帮你查好了」「希望对你有帮助」），不复述用户的问题，不说「点下面的卡片」「详情见报告」这类指引——图片、研究报告、结果卡片会自动附在消息下面。
 - 每条消息一句话，尽量 25 字以内，最长 40 字；口语化，不用 markdown、列表、序号，表情最多一个。
 - 默认只发 1 条；一条说不下才拆成 2–3 条，每条只讲一件事，按重要性排。最多 3 条。
 - 研究报告、附了全文卡片的结果：只说最关键的结论（推荐哪个、答案是什么、最要注意的一点），细节都在卡片里，不要逐条复述。
-- 网站：一句说做好了，加一个亮点；不要说附件、文件、下载、代码、用浏览器打开。
-${L.say}
 - 失败：一句说没弄成和原因（说人话，不贴报错），一句下一步建议。
 - 打电话的结果：第一条开头带一个 emoji，后面空一格——✅ 办成了（约上了、问到了）；⏸️ 要用户决定（店里给了别的时间、要定金、要本人通话），最后问一句怎么办；📞 只用在没接通（没人接、占线、关机、不在服务区、转了语音信箱）：标了「几点会自动再打一次」的，说几点再打、打完告诉他；没标的不会再自动打，别说得像你之后会自己再打（「明天再试」），问一句要不要换一家或者明天再让你打；❌ 接通了但没办成（约满了、不接受 AI 电话、打错了、没这项服务），或者打不了（空号、停机、平台拦了、缺信息）。说清结论、时间、价格；几家的结果按家说。不要说「通话记录」「转写」，每通电话会自动附上通话组件。
 - 不要提 id、GALLERY、工具名、执行 agent。
@@ -513,7 +474,7 @@ ${L.say}
 // 前台转述：1–3 条短消息（一条说不下才拆开）
 async function sayResult(u, prompt, fallback) {
   try {
-    const out = parseJsonLoose(await longcat(COMPLETION_SYSTEM(loginTalk(u)), prompt, 300, { json: true, name: '转述' }));
+    const out = parseJsonLoose(await longcat(COMPLETION_SYSTEM, prompt, 300, { json: true, name: '转述' }));
     const parts = (Array.isArray(out?.messages) ? out.messages : [out?.reply ?? out?.text])
       .map((x) => String(x ?? '').trim()).filter(Boolean).slice(0, 3);
     if (parts.length) return parts;
@@ -531,7 +492,6 @@ async function sendParts(u, items, { first = {}, last = {}, all = {} } = {}) {
 }
 
 const statusLabel = { queued: '排队中', running: '进行中', done: '已完成', failed: '失败', stopped: '已停止' };
-const PLATFORM_LABEL = { weibo: '微博', x: 'X', instagram: 'Instagram', weverse: 'Weverse', bilibili: 'B 站', xiaohongshu: '小红书' };
 const secsSince = (iso) => Math.round((Date.now() - Date.parse(iso)) / 1000);
 const nowText = () => new Date().toLocaleString('zh-CN', { hour12: false, weekday: 'short' });
 
@@ -551,10 +511,6 @@ function dispatcherContext(u) {
   const state = u.state;
   let profile = '';
   try { profile = fs.readFileSync(path.join(u.home, 'memories/USER.md'), 'utf8').split(/\n?§\n?/).map((s) => s.trim()).filter(Boolean).join('；'); } catch {}
-  const follows = readJson(path.join(u.home, 'official_accounts.json'), [])
-    .map((a) => `${a.name}（${PLATFORM_LABEL[a.platform || 'weibo'] || a.platform}${a.idol ? `·${a.idol}` : ''}）`).join('、');
-  const logins = (sandboxSessions?.platforms || []).filter((p) => p.canLogin)
-    .map((p) => `${p.label}${p.loggedIn ? '已登录' : p.needsLogin ? '未登录' : '未登录（可免登录读）'}`).join('、');
   const tasks = state.tasks.slice(-8).map((t) => {
     const step = t.steps?.at(-1)?.label;
     const when = t.status === 'running' ? `（已 ${secsSince(t.startedAt)} 秒${step ? `，在${step}` : ''}）`
@@ -568,14 +524,7 @@ function dispatcherContext(u) {
     + (m.goalId && m.taskId ? '（来自目标）' : '') + (m.report ? `（发了${m.report.kind === 'result' ? '完整结果卡片' : '研究报告'}：${m.report.title}）` : '')
     + (m.partOf && m.taskId ? resultNote(u, m) : '')).join('\n');
   const goals = state.goals.map((g) => `- ${g.id} ${g.title}（${g.done ? '已完成' : `${scheduleLabel(g.schedule)}${g.enabled ? '' : '，已暂停'}`}）：${g.status?.text || ''}`).join('\n');
-  const s = ledgerSummary(u);
-  const todayEntries = readLedger(u).filter((e) => e.date === today()).slice(-30)
-    .map((e) => `\n- ${e.id}：${e.note || e.category} ${e.type === 'income' ? '+' : '-'}${money(e.amount)}（${e.category}）`).join('');
-  return `【现在】${nowText()}\n【用户画像】${profile || '（还不知道）'}\n【用户位置】${locationLine(u) || '（没共享）'}\n【已关注账号】${follows || '（无）'}`
-    + (logins ? `\n【平台登录】微博免登录；${logins}` : '') + `\n【目标】\n${goals || '（无）'}`
-    + `\n【记账】本月支出 ${money(s.expense)}，收入 ${money(s.income)}，今天支出 ${money(s.todayExpense)}`
-    + `\n【今日账目】${todayEntries || '（无）'}`
-    + `\n【网站】${listSites(u).slice(0, 5).map((x) => `\n- ${x.id}：${x.title}（第 ${x.version} 版）`).join('') || '（无）'}`
+  return `【现在】${nowText()}\n【用户画像】${profile || '（还不知道）'}\n【目标】\n${goals || '（无）'}`
     + (pendingCall(u) ? `\n【待确认的电话】${pendingCall(u).title}：${pendingCall(u).brief}` : '')
     + `\n【后台任务】\n${tasks || '（无）'}\n【最近聊天】\n${history || '（无）'}`;
 }
@@ -629,8 +578,7 @@ function closeAsk(u, chatId, picked, text) {
 
 async function dispatch(u, text, imageCount, chatId = u.state.currentChat) {
   const state = u.state;
-  await sandbox('/sessions', 1_500).catch(() => {}); // 刷新【平台登录】；沙箱没开就沿用上次的
-  const raw = await longcat(DISPATCHER_SYSTEM(loginTalk(u)),
+  const raw = await longcat(DISPATCHER_SYSTEM,
     `${dispatcherContext(u)}\n\n【用户新消息】${text || '（只发了图）'}${imageCount ? `（附带 ${imageCount} 张图片）` : ''}\n\n只输出 JSON。`, 600, { json: true, name: '调度决策' });
   let out;
   // 解析不了时，至少把 reply 那句话抠出来，别把一串 JSON 发给用户。
@@ -684,8 +632,6 @@ async function dispatch(u, text, imageCount, chatId = u.state.currentChat) {
     stop,
     goal: out.goal?.brief ? out.goal : null,
     goalDone: (Array.isArray(out.goal_done) ? out.goal_done : []).map((id) => state.goals.find((g) => g.id === String(id) && !g.done)).filter(Boolean),
-    ledger: Array.isArray(out.ledger) ? out.ledger : [],
-    ledgerDelete: Array.isArray(out.ledger_delete) ? out.ledger_delete.map(String) : [],
   };
   // 轨迹：模型给的决定 → App 校验、兜底改写后真正执行的决定（两边不一样时就是要查的地方）
   lfEvent(traceCtx.getStore(), '调度结果', { 'langfuse.observation.input': out, 'langfuse.observation.output': {
@@ -701,7 +647,7 @@ const SEARCH_JUDGE = `你在帮助理判断网页搜索结果能不能回答用�
 {"relevant": true 或 false, "next": "结果不相关时，换一个更可能搜到的搜索词（换说法、去掉或加上限定词）；相关就填 null", "note": "不超过 12 个字，说结果怎么样，比如：结果不相关，换个词再搜"}`;
 const SEARCH_ANSWER = `你是「喵团」的前台，用户的私人助理。你刚上网搜了一下，根据搜索结果回答用户，像真人发微信。
 - 结果里有答案：直接说，带上关键事实（名字、数字、时间、地点），1–3 条短消息，每条一句话；sources 填你用到的结果编号。
-- 结果里没有、或者都不相关：照实说没查到，一句话说可能的原因（比如小红书、抖音上的店铺和小账号基本不被搜索引擎收录，太新的事还没被收录）；需要的话顺口问一句下一步（比如「要不要我去小红书上搜搜？」「要我深挖一下吗？」），用户直接回一句就行，不要列选项。
+- 结果里没有、或者都不相关：照实说没查到，一句话说可能的原因（比如小店和小账号基本不被搜索引擎收录，太新的事还没被收录）；需要的话顺口问一句下一步（比如「要我深挖一下吗？」），用户直接回一句就行，不要列选项。
 - 不要编造搜索结果里没有的事实；不用 markdown、列表、序号；不要说「根据搜索结果」「我搜了一下」这类过程话。
 只输出 JSON：{"messages": ["…"], "found": true 或 false, "sources": [1, 2]}`;
 
@@ -815,7 +761,6 @@ async function runRound(t, input) {
   if (res.status === 404) return { lost: true }; // agent 重启过，这一轮没了
   if (!res.ok) throw new Error(`agent ${res.status}: ${(await res.text()).slice(0, 200)}`);
   const pool = [];
-  const sites = new Map(); // publish_site 发布的网站（同一个网站改了几版只留最后一版）
   let end = null;
   const decoder = new TextDecoder();
   let buf = '';
@@ -829,7 +774,7 @@ async function runRound(t, input) {
       if (!data) continue;
       const ev = JSON.parse(data);
       if (Number.isInteger(ev.seq)) { t.lastSeq = ev.seq; save(u); }
-      if (ev.event === 'tool.started' || ev.event === 'tool.completed') onToolEvent(t, ev, pool, sites);
+      if (ev.event === 'tool.started' || ev.event === 'tool.completed') onToolEvent(t, ev, pool);
       else if (RUN_END.has(ev.event)) end = ev;
     }
     if (end) break;
@@ -837,11 +782,11 @@ async function runRound(t, input) {
   if (!end) throw new Error('和执行 agent 的连接断了');
   if (end.event === 'run.failed') throw new Error(end.error || '执行 agent 运行失败');
   if (end.event !== 'run.completed') return { stopped: true };
-  return { ...resolveGallery(end.output || '', pool), sites: [...sites.values()], pendingSteer: end.pending_steer || '' };
+  return { ...resolveGallery(end.output || '', pool), pendingSteer: end.pending_steer || '' };
 }
 
 // Pi 工具事件已包含参数和结果，直接更新步骤与成果。
-function onToolEvent(t, event, pool, sites) {
+function onToolEvent(t, event, pool) {
   const recorded = recordToolEvent(t, event, {
     labelFor: (name) => STEP_LABEL[name] || name,
     describe: (name, args, completed) => describeStep(name, args, completed ? toolResult(completed.result, completed.error === true) : undefined),
@@ -852,8 +797,6 @@ function onToolEvent(t, event, pool, sites) {
   if (event.event === 'tool.completed') {
     const seen = new Set(pool.map((photo) => photo.id));
     for (const photo of photosFromToolOutput(event.result)) if (!seen.has(photo.id)) { pool.push(photo); seen.add(photo.id); }
-    const site = siteFromToolOutput(U(t), event.result);
-    if (site) { sites.set(site.id, site); broadcast(U(t), { type: 'site', site }); }
     trackResearchResult(t, { call_id: event.tool_call_id, output: event.result });
   }
   updateTask(t, {});
@@ -865,8 +808,6 @@ const clip = (s, n) => { const x = String(s ?? '').replace(/\s+/g, ' ').trim(); 
 const hostOf = (u) => { try { return new URL(u).host.replace(/^www\./, ''); } catch { return clip(u, 40); } };
 const clipLines = (s, n) => clip(String(s ?? '').replace(/\s*\n\s*/g, '\u0001'), n).replace(/\u0001/g, '\n'); // 和 clip 一样，但保留换行
 const lines = (...xs) => xs.flat().filter(Boolean).join('\n');
-// 平台名夹在中文里：X、Instagram 这类前后空一格（「看 X 账号」），微博、小红书不空
-const platName = (p) => (PLATFORM_LABEL[p] || p || '').replace(/^(?=[A-Za-z0-9])/, ' ').replace(/(?<=[A-Za-z0-9])$/, ' ');
 
 // 工具结果转成对象：不是 JSON 的当成纯文字；事件流标了出错（tool.completed 的 error）的记成 error
 function toolResult(raw, failed) {
@@ -891,43 +832,6 @@ const STEP_TEXT = {
     ? { title: `读了「${clip(o.title || hostOf(o.url || a.url), 28)}」`, detail: lines(o.url || a.url, `读到约 ${o.text.length} 字${o.truncated ? '（很长，只读了前面）' : ''}`, o.note) }
     : { title: `打开 ${hostOf(a.url)}，没读到内容`, detail: lines(a.url, o.note), ok: false }) }),
   fetch_url: (a) => ({ act: `读网址 ${hostOf(a.url)}`, detail: a.url }),
-  official_photos: (a) => {
-    const names = (a.accounts || []).map((x) => x?.name || x?.uid).filter(Boolean);
-    const act = names.length ? `看${platName(a.accounts[0]?.platform)}账号 ${clip(names.join('、'), 30)}` : `看关注的${platName(a.platform) || '社媒'}账号`;
-    return { act, done: (o) => {
-      const posts = o.posts || [];
-      const login = (o.login_needed || []).map((x) => platName(x.platform));
-      return {
-        title: posts.length ? `${act}，读了 ${posts.length} 条帖子` : login.length ? `要先登录${login.join('、').trimEnd()}` : `${act}，最近没有新帖子`,
-        ok: posts.length > 0,
-        detail: lines(posts.slice(0, 3).map((p) => `@${p.account}：${clip(p.text, 40)}`), o.photos?.length ? `带 ${o.photos.length} 张图` : '', (o.errors || []).join('；'), (o.notes || []).join('；')),
-      };
-    } };
-  },
-  official_account: (a) => {
-    const p = platName(a.platform);
-    const who = a.account_name || a.name || a.uid || '';
-    if (a.action === 'find') {
-      return { act: `在${p}找账号「${clip(a.name, 20)}」`, done: (o) => {
-        const c = o.candidates || [];
-        return { title: c.length ? `在${p}找到 ${c.length} 个「${clip(a.name, 20)}」相关账号` : `在${p}没找到「${clip(a.name, 20)}」`, ok: c.length > 0,
-          detail: c.slice(0, 3).map((x) => clip(x.name || x.nick || x.screen_name || x.uid, 30)).join('\n') };
-      } };
-    }
-    if (a.action === 'follow') return { act: `关注${p}账号 ${clip(who, 20)}` };
-    if (a.action === 'unfollow') return { act: `取关${p}账号 ${clip(who, 20)}` };
-    if (a.action === 'status') return { act: '看各平台的登录状态' };
-    return { act: '看关注的账号', done: (o) => ({ title: `看关注的账号，一共 ${(o.accounts || []).length} 个` }) };
-  },
-  xiaohongshu_search: (a) => {
-    const act = `在小红书搜「${clip(a.query, 30)}」`;
-    return { act, done: (o) => {
-      if (o.login_needed) return { title: '小红书要先登录', ok: false };
-      const notes = o.notes || [];
-      return { title: notes.length ? `${act}，找到 ${notes.length} 篇笔记` : `${act}，没有结果`, ok: notes.length > 0,
-        detail: notes.length ? notes.slice(0, 3).map((n) => `${clip(n.title, 36)}${n.likes ? ` · ${n.likes} 赞` : ''}`).join('\n') : o.hint };
-    } };
-  },
   idol_photo_search: (a) => {
     const act = `搜图「${clip((a.queries || [a.query]).filter(Boolean).join('、'), 30)}」`;
     return { act, done: (o) => ({ title: o.photos?.length ? `${act}，找到 ${o.photos.length} 张` : `${act}，没找到`, ok: !!o.photos?.length }) };
@@ -943,25 +847,12 @@ const STEP_TEXT = {
     : a.action === 'search' ? { act: `找技能「${clip(a.query, 24)}」`, done: (o) => ({ title: `找技能「${clip(a.query, 24)}」，找到 ${(o.results || []).length} 个`,
       detail: (o.results || []).slice(0, 3).map((x) => `${x.name} · ${clip(x.description, 40)}`).join('\n') }) }
       : { act: '看装过的技能' }),
-  publish_site: (a) => ({ act: `发布网页「${clip(a.title, 24)}」`, done: (o) => (o.site
-    ? { title: `发布了网页「${clip(o.site.title || a.title, 24)}」${o.site.version > 1 ? `（第 ${o.site.version} 版）` : ''}`, detail: o.site.url } : {}) }),
-  read_site: (a) => ({ act: '读网站源码', detail: a.site_id }),
-  check_site: () => ({ act: '打开网页自查', done: (o) => {
-    const issues = o.issues || [];
-    return { title: issues.length ? `网页自查，发现 ${issues.length} 个问题` : '网页自查，没发现报错', ok: !issues.length,
-      detail: issues.length ? issues.slice(0, 3).map((i) => clip(i.message || i.text || JSON.stringify(i), 80)).join('\n') : clip(o.summary, 120) };
-  } }),
   phone_call: (a) => {
     const act = `给「${clip(a.name, 20)}」打电话`;
     return { act, detail: a.goal, done: (o) => (o.dialed === false ? { title: `没打出去：${clip(o.result, 24)}`, detail: o.retry_hint, ok: false }
       : !o.connected ? { title: `${act}，${clip(o.result, 20)}`, detail: lines(a.goal, o.retry_hint), ok: false }
         : { title: `打完给「${clip(a.name, 20)}」的电话`, detail: lines(o.summary, a.goal) }) };
   },
-  ledger_add: (a) => ({ act: `记账${a.entries?.length ? `：${clip(a.entries.map((e) => `${e.note || e.category} ¥${e.amount}`).join('、'), 40)}` : ''}` }),
-  ledger_query: () => ({ act: '查账' }),
-  ledger_delete: () => ({ act: '删账' }),
-  ledger_memory: (a) => ({ act: a.action === 'update' ? '更新记账记忆' : '看记账记忆' }),
-
 };
 
 // 没写专门说法的工具：工具的中文名 + 最像「对象」的那个参数
@@ -1090,73 +981,15 @@ function resultCard(text) {
   return body.length > 300 || items >= 3 || contacts >= 2 ? { body, kind: 'result' } : null;
 }
 
-// ---------- 网站：执行 agent 做的网页（publish_site），App 内置浏览器里看 ----------
-// 每个人的网站在自己主目录的 sites/<id>/；网站服务按 id 找（id 是随机的，大家的不会撞），知道链接的人都能看。
-const SITE_ID = /^s_[0-9a-f]{8}$/;
-const sitesDir = (u) => path.join(u.home, 'sites');
-
-function readSite(u, id) {
-  if (!SITE_ID.test(id || '')) return null;
-  const meta = readJson(path.join(sitesDir(u), id, 'meta.json'), null);
-  return meta && { id, title: meta.title || '未命名网站', description: meta.description || '', version: meta.version || 1, createdAt: meta.createdAt, updatedAt: meta.updatedAt || meta.createdAt };
-}
-
-function listSites(u) {
-  let ids = [];
-  try { ids = fs.readdirSync(sitesDir(u)); } catch {}
-  return ids.map((id) => readSite(u, id)).filter(Boolean).sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
-}
-
-// 网站服务用：这个 id 的网站在谁的目录里（停用账号的网站不再提供）
-function findSiteDir(id) {
-  if (!SITE_ID.test(id || '')) return null;
-  for (const u of users.values()) {
-    if (active(u) && fs.existsSync(path.join(sitesDir(u), id, 'meta.json'))) return path.join(sitesDir(u), id);
-  }
-  return null;
-}
-
-function siteFromToolOutput(u, output) {
-  const site = toolOutputJson(output)?.site;
-  if (site?.id) return readSite(u, site.id);
-  return null;
-}
-
-// 与原生 publish_site 工具共用 index.html + meta.json 格式。
-function saveSite(u, { title, html, description = '' }) {
-  const id = `s_${crypto.randomBytes(4).toString('hex')}`;
-  const dir = path.join(sitesDir(u), id);
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'index.html'), html);
-  const at = isoNow();
-  fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ id, title, description, version: 1, createdAt: at, updatedAt: at }, null, 2));
-  const site = readSite(u, id);
-  broadcast(u, { type: 'site', site });
-  return site;
-}
-
-// agent 偶尔不调 publish_site，直接把整页 HTML 贴在回复里：替它发布，正文里的代码块换成一句话。
-function rescueHtmlSite(u, result, fallbackTitle) {
-  if (result.sites?.length) return result;
-  const m = /```html\s*\n([\s\S]*?<\/html>)\s*```/i.exec(result.text || '');
-  if (!m) return result;
-  const title = (/<title>([^<]{1,60})<\/title>/i.exec(m[1])?.[1] || fallbackTitle).trim();
-  const site = saveSite(u, { title, html: m[1] });
-  const text = `${result.text.slice(0, m.index)}（网页已发布：${site.title}）${result.text.slice(m.index + m[0].length)}`.trim();
-  return { ...result, text, sites: [site] };
-}
-
 const outputRule = (t) => (t.kind === 'research'
   ? '最后按 deep-research 的报告格式输出：先单独一行写 REPORT:，下面是完整报告，末尾必须有 SOURCES: 列表。'
   : '做完后输出：结果要点（不超过 300 字，重要事实写清楚）；如有图片，最后单独一行 GALLERY: id1,id2,...');
 
 function firstPrompt(t) {
   const u = U(t);
-  const where = locationLine(u);
   return `【后台任务：${t.title}】（现在是 ${nowText()}，任务编号：${t.id}）\n${t.brief}`
     // /v1/runs 不收图片：给本地路径，让 agent 自己用 vision_analyze 看
     + (t.images.length ? `\n\n用户发来的图片（本地文件，用 vision_analyze 看，image_url 填路径）：\n${t.images.map((img) => path.join(u.dir, 'uploads', path.basename(img))).join('\n')}` : '')
-    + (where ? `\n（用户当前位置：${where}。用户说「附近」「这边」「本地」时以此为准；和位置无关的任务忽略这一行。）` : '')
     + (t.kind === 'research'
       ? `\n\n这是深度搜索任务：先 skill_view deep-research，按里面的步骤做（deep_web_search 多角度搜、read_webpage 读原文、交叉核对），${outputRule(t)}`
       : `\n\n你在后台执行，结果会由前台转述给用户。${outputRule(t)}`);
@@ -1167,7 +1000,7 @@ function revisionPrompt(t) {
   const prev = t.result?.text ? `\n\n上一轮的结果（节选）：\n${t.result.text.slice(0, 1500)}` : '';
   return `【后台任务：${t.title} · 第 ${t.round} 轮修改】（现在是 ${nowText()}，任务编号：${t.id}）\n原来的任务：${t.brief}${prev}`
     + `\n\n用户对结果提出了修改：\n${(t.asks || []).map((a) => `- ${a}`).join('\n')}`
-    + `\n\n在前面工作的基础上改：已经查到的信息、读过的网页不用重查，只补做或重做需要改的部分；之前发布过网站就用同一个 site_id 更新。${outputRule(t)}`;
+    + `\n\n在前面工作的基础上改：已经查到的信息、读过的网页不用重查，只补做或重做需要改的部分。${outputRule(t)}`;
 }
 
 // 用户的修改记录：state 是这条要求的去向
@@ -1225,7 +1058,7 @@ async function runTask(t) {
     updateTask(t, { status: 'failed', endedAt: isoNow(), runId: undefined, error: r.error.slice(0, 300) });
     deliver(t).catch((e) => console.error('[deliver]', e.message));
   } else {
-    const result = rescueHtmlSite(U(t), r, t.title);
+    const result = r;
     // 插话被接收了、但这一轮在送到之前就结束了（pending_steer），或者压根没赶上：不发结果，直接接着改一轮。
     if (!r.pendingSteer) setRevisions(t, ['sent'], { state: 'delivered' });
     const late = (t.revisions || []).filter((v) => v.state === 'pending' || (v.state === 'sent' && r.pendingSteer));
@@ -1389,11 +1222,10 @@ async function deliverTask(t, act) {
   const u = U(t);
   activityStep(act, t.status === 'done' ? '写消息' : '告诉你没弄成');
   const photos = t.result?.photos || [];
-  const sites = t.result?.sites || [];
   const calls = callsOf(t); // 这一轮打的电话：转述时附上结果，消息下面挂通话组件
-  // 研究报告挂报告卡片；普通任务的结果有清单或比较长时也挂成卡片（做了网站、打了电话的不挂：网站卡片、通话组件就是结果）
+  // 研究报告挂报告卡片；普通任务的结果有清单或比较长时也挂成卡片（打了电话的不挂：通话组件就是结果）
   const report = t.status !== 'done' ? null : t.kind === 'research' ? parseReport(t.result.text)
-    : sites.length || calls.length ? null : resultCard(t.result.text);
+    : calls.length ? null : resultCard(t.result.text);
   const body = report?.body || t.result?.text || '（无文字）';
   // 中途插话或做完后改过要求：告诉转述的模型以修改后的为准（任务标题还是最初那个）
   const asks = (t.revisions || []).filter((v) => v.round === (t.round || 1) && ['delivered', 'round'].includes(v.state)).map((v) => v.text);
@@ -1401,12 +1233,11 @@ async function deliverTask(t, act) {
   // 打了电话的：每通的结果、会不会自动再打（任务后来失败了也要说，电话已经打出去了）
   const callLine = calls.length ? `\n打的电话：${calls.map((c) => `${c.short}——${c.label}：${c.summary}${redialNote(u, t, c)}`).join('；')}（每通会附上通话组件）` : '';
   const parts = await sayResult(u, t.status === 'done'
-    ? `现在是 ${nowText()}\n任务：${t.title}${redo}\n${!report?.body ? '结果' : report.kind === 'result' ? '结果（全文会单独附成卡片）' : '研究报告（会单独附上）'}：${body.slice(0, 2000)}\n附图：${photos.length} 张`
-      + (sites.length ? `\n网站：${sites.map((s) => `「${s.title}」`).join('、')}（已发布，会附上网站卡片）` : '') + callLine
+    ? `现在是 ${nowText()}\n任务：${t.title}${redo}\n${!report?.body ? '结果' : report.kind === 'result' ? '结果（全文会单独附成卡片）' : '研究报告（会单独附上）'}：${body.slice(0, 2000)}\n附图：${photos.length} 张` + callLine
     : `任务：${t.title}\n失败了，原因：${t.error}${callLine}`,
   t.status === 'done' ? firstSentence(body) : '这次没弄成，等下再试试？');
-  // 研究报告、结果卡片单独一条（只有卡片）；没有卡片时，图和网站挂在最后一条文字上。任务来源、用时挂在最后一条。
-  const attach = { ...(photos.length && { photos }), ...(sites.length && { sites }), ...(calls.length && { booking: { type: 'calls', calls } }) };
+  // 研究报告、结果卡片单独一条（只有卡片）；没有卡片时，图挂在最后一条文字上。任务来源、用时挂在最后一条。
+  const attach = { ...(photos.length && { photos }), ...(calls.length && { booking: { type: 'calls', calls } }) };
   const items = parts.map((text) => ({ text }));
   if (report?.body) { items.push({ text: '', report: { title: t.title, ...report }, ...attach }); if (report.kind !== 'result') u.state.stats.reports++; }
   else Object.assign(items.at(-1), attach);
@@ -1416,7 +1247,7 @@ async function deliverTask(t, act) {
     last: { taskId: t.id, round: t.round || 1, took: roundSecs(t) },
   });
   noteSaid(t, parts.join(' '));
-  const extra = [report?.body && (report.kind === 'result' ? '完整结果卡片' : '研究报告'), photos.length && `${photos.length} 张图`, sites.length && `网站「${sites[0].title}」`].filter(Boolean);
+  const extra = [report?.body && (report.kind === 'result' ? '完整结果卡片' : '研究报告'), photos.length && `${photos.length} 张图`].filter(Boolean);
   endActivity(act, `${t.status === 'done' ? '' : '没弄成：'}${parts[0]}${extra.length ? `（附${extra.join('、')}）` : ''}`);
 }
 
@@ -1486,10 +1317,10 @@ function createGoal(u, { title, brief, schedule, kind = 'general', createdBy = '
   return g;
 }
 
-// 普通成员最多几个进行中的目标（AI 自己维护的「记账管家」、没接通的自动重拨不算）：超了返回一句给用户看的话
+// 普通成员最多几个进行中的目标（没接通的自动重拨不算）：超了返回一句给用户看的话
 function goalLimit(u) {
   if (u.role === 'admin') return '';
-  const n = u.state.goals.filter((g) => !g.done && g.kind !== 'ledger' && g.kind !== 'redial').length;
+  const n = u.state.goals.filter((g) => !g.done && g.kind !== 'redial').length;
   return n >= QUOTA.goals ? `最多同时盯 ${QUOTA.goals} 个目标哦，先完成或删掉一个再加～` : '';
 }
 
@@ -1571,7 +1402,7 @@ async function deliverGoal(t) {
   const raw = t.result.text || '';
   const status = /STATUS[:：]\s*(.+)/i.exec(raw)?.[1]?.trim();
   const isNew = /NEW[:：]\s*(yes|是|true)/i.test(raw);
-  const isDone = /DONE[:：]\s*(yes|是|true)/i.test(raw) && g.kind !== 'ledger';
+  const isDone = /DONE[:：]\s*(yes|是|true)/i.test(raw);
   const body = raw.replace(/^.*STATUS[:：].*$/im, '').replace(/^.*NEW[:：].*$/im, '').replace(/^.*DONE[:：].*$/im, '').trim();
   g.status = { text: (status || body.split('\n')[0] || '已检查，暂无变化').slice(0, 60), at: isoNow() };
   goalLog(g, `检查：${g.status.text}${isNew ? '（有新进展，告诉你了）' : ''}`, t.id);
@@ -1591,83 +1422,7 @@ async function deliverGoal(t) {
 }
 
 
-// ---------- 记账：与执行 agent 的 ledger 工具共用这个人主目录下的 ledger/ ----------
-const today = () => new Date().toLocaleDateString('sv-SE'); // YYYY-MM-DD（本地时区）
-const money = (n) => `¥${(Math.round(n * 100) / 100).toLocaleString('zh-CN')}`;
-const ledgerFile = (u) => path.join(u.home, 'ledger', 'entries.json');
-const readLedger = (u) => readJson(ledgerFile(u), []);
-
-async function mutateLedger(u, change) {
-  const file = ledgerFile(u);
-  await withFileLock(file, async () => {
-    const entries = change(readLedger(u));
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    const tmp = `${file}.${crypto.randomUUID()}.tmp`;
-    try {
-      fs.writeFileSync(tmp, JSON.stringify(entries, null, 2), { mode: 0o600 });
-      fs.renameSync(tmp, file);
-    } finally { fs.rmSync(tmp, { force: true }); }
-  });
-}
-
-// 只接受最近 60 天内、不晚于今天的日期，防止模型编日期。
-function saneDate(d) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(d || '')) return today();
-  const days = (Date.parse(today()) - Date.parse(d)) / 86_400_000;
-  return days >= 0 && days <= 60 ? d : today();
-}
-
-async function addLedgerEntries(u, items, source) {
-  const clean = items.map((e) => {
-    const amount = Math.abs(Number(e?.amount));
-    if (!(amount > 0)) return null;
-    return {
-      id: newId('l'), type: e.type === 'income' ? 'income' : 'expense', amount: Math.round(amount * 100) / 100,
-      category: String(e.category || '其他').slice(0, 10), note: String(e.note || '').slice(0, 60),
-      date: saneDate(e.date), createdAt: isoNow(), source,
-    };
-  }).filter(Boolean);
-  if (!clean.length) return [];
-  await mutateLedger(u, (entries) => [...entries, ...clean]);
-  onLedgerChange(u);
-  return clean;
-}
-
-function ledgerSummary(u) {
-  const month = today().slice(0, 7);
-  const inMonth = readLedger(u).filter((e) => e.date?.startsWith(month));
-  const sum = (list) => list.reduce((a, e) => a + Number(e.amount || 0), 0);
-  const expenses = inMonth.filter((e) => e.type === 'expense');
-  const byCategory = {};
-  for (const e of expenses) byCategory[e.category] = (byCategory[e.category] || 0) + Number(e.amount || 0);
-  return {
-    month, expense: sum(expenses), income: sum(inMonth.filter((e) => e.type === 'income')),
-    todayExpense: sum(expenses.filter((e) => e.date === today())), count: inMonth.length,
-    byCategory: Object.entries(byCategory).sort((a, b) => b[1] - a[1]).map(([category, amount]) => ({ category, amount })),
-  };
-}
-
-const LEDGER_GOAL_BRIEF = `帮用户把账管好：
-1. 用 ledger_query 查今天和本月的收支（按分类）。
-2. 用 ledger_memory read 读记账记忆，结合新账目更新它（发现的固定收支、消费习惯、用户提过的预算；没有预算就别编），有变化才 ledger_memory update。
-3. STATUS 写本月支出，有预算时加上预算余量。
-4. 只有这些情况才 NEW: yes：本月支出超过预算或达到预算 90%；某个分类明显比平时多；今天是周日（发一份本周小结）；发现疑似重复记账。`;
-
-function ensureLedgerGoal(u) {
-  return u.state.goals.find((g) => g.kind === 'ledger')
-    || createGoal(u, { title: '记账管家', kind: 'ledger', createdBy: 'ai', source: 'ai', schedule: { at: '21:30' }, runNow: false, brief: LEDGER_GOAL_BRIEF });
-}
-
-// 每次记账后立刻刷新「记账管家」的状态小字（不用等 AI 检查）。
-function onLedgerChange(u) {
-  broadcast(u, { type: 'ledger' });
-  const g = ensureLedgerGoal(u);
-  const s = ledgerSummary(u);
-  g.status = { text: `本月支出 ${money(s.expense)} · 今天 ${money(s.todayExpense)}`, at: isoNow() };
-  saveGoal(g);
-}
-
-const GOAL_SYSTEM = `把用户想持续关注的事整理成一个「目标」，交给会定期执行检查的后台 agent（它能上网搜索和读网页、读各平台公开账号、搜图、查天气等实用信息、看用户记忆、查账记账）。
+const GOAL_SYSTEM = `把用户想持续关注的事整理成一个「目标」，交给会定期执行检查的后台 agent（它能上网搜索和读网页、搜图、查天气等实用信息、看用户记忆）。
 只输出 JSON：{"title": "不超过 12 个字", "brief": "每次检查要做什么、关注什么（人、事、价格、地点……）、什么算新进展", "schedule": {"every": 分钟数} 或 {"at": "HH:MM"}}
 用户没说频率就 {"every": 360}；说「每天」默认 {"at": "09:00"}。`;
 
@@ -1711,17 +1466,7 @@ function isPrivateAddress(ip) {
     || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127);
 }
 
-// 部分图床校验 Referer（微博 sinaimg、B 站 hdslb、X twimg、Instagram cdninstagram / fbcdn、Weverse wevpstatic）。
-function refererFor(host) {
-  if (host.endsWith('sinaimg.cn')) return 'https://weibo.com/';
-  if (host.endsWith('hdslb.com')) return 'https://www.bilibili.com/';
-  if (host.endsWith('twimg.com')) return 'https://x.com/';
-  if (host.endsWith('cdninstagram.com') || host.endsWith('fbcdn.net')) return 'https://www.instagram.com/';
-  if (host.endsWith('wevpstatic.net') || host.endsWith('weverse.io')) return 'https://weverse.io/';
-  return undefined;
-}
-
-// ---------- 沙箱浏览器：平台登录状态 / 登录窗口（App 不碰账号密码，登录由用户在沙箱弹出的窗口里自己完成） ----------
+// ---------- 沙箱浏览器：网页搜索、读网页 ----------
 const SANDBOX_URL = process.env.CATTUAN_SANDBOX_URL || 'http://127.0.0.1:8660';
 
 // ---------- 浏览器实时画面：订阅沙箱 /live，转给 App；每个任务存最多 16 张关键帧做回放（仿 Claude Cowork） ----------
@@ -1731,7 +1476,7 @@ const setSandboxFrames = (on) => fetch(`${SANDBOX_URL}/live/frames?on=${on ? 1 :
 
 // 沙箱一次只做一件事。一段操作（start…end）属于哪个任务：原生工具带了任务编号（从 Pi 的会话 id 取）就用它；
 // 没带时才看此刻哪个任务正卡在会用沙箱的工具步骤上。这样的任务分属不同的人时不猜：宁可不显示，也不把别人的画面挂到你的任务上。
-const SANDBOX_TOOLS = new Set(['official_photos', 'official_account', 'xiaohongshu_search', 'deep_web_search', 'read_webpage', 'check_site']);
+const SANDBOX_TOOLS = new Set(['deep_web_search', 'read_webpage']);
 let liveOwner = null;
 function findTask(id) {
   if (!id) return null;
@@ -1802,15 +1547,11 @@ async function connectLive() {
   setTimeout(connectLive, 3_000); // 沙箱重启或还没起来：过几秒再连
 }
 connectLive();
-let sandboxSessions = null; // 最近一次拿到的各平台登录状态，给调度者参考
-
 async function sandbox(pathname, timeout = 10_000) {
   const r = await fetch(SANDBOX_URL + pathname, { signal: AbortSignal.timeout(timeout) });
   const body = await r.json().catch(() => ({ error: 'failed', message: `沙箱返回 ${r.status}` }));
-  if (r.ok && body.platforms) sandboxSessions = body;
   return { status: r.status, body };
 }
-const sandboxDown = (e) => ({ status: 502, body: { error: 'sandbox_down', message: `沙箱没连上（scripts/start.sh 会启动它）：${e.message}` } });
 
 async function proxyImage(res, raw) {
   let url;
@@ -1821,10 +1562,7 @@ async function proxyImage(res, raw) {
     if (!['http:', 'https:'].includes(url.protocol)) return sendJson(res, 400, { error: 'bad url' });
     const { address } = await dns.lookup(url.hostname);
     if (isPrivateAddress(address)) return sendJson(res, 403, { error: 'forbidden' });
-    const headers = { 'User-Agent': UA, Accept: 'image/*' };
-    const referer = refererFor(url.hostname);
-    if (referer) headers.Referer = referer;
-    upstream = await fetch(url, { headers, redirect: 'manual', signal: AbortSignal.timeout(20_000) });
+    upstream = await fetch(url, { headers: { 'User-Agent': UA, Accept: 'image/*' }, redirect: 'manual', signal: AbortSignal.timeout(20_000) });
     const next = upstream.status >= 300 && upstream.status < 400 && upstream.headers.get('location');
     if (!next) break;
     upstream.body?.cancel().catch(() => {});
@@ -1837,76 +1575,9 @@ async function proxyImage(res, raw) {
   Readable.fromWeb(upstream.body).pipe(res);
 }
 
-// ---------- 用户位置：浏览器定位 → 反查城市/区。精确坐标只存本机，给 AI 的只有城市/区和约 1 公里精度的坐标 ----------
-const LOCATION_FRESH = 24 * 3600_000; // 超过一天的位置不再告诉 AI
-const GEO_UA = { 'User-Agent': 'CatTuan/0.1 (local personal assistant)', 'Accept-Language': 'zh-CN' };
-
 function agoText(ms) {
   const m = Math.round(ms / 60_000);
   return m < 1 ? '刚刚' : m < 60 ? `${m} 分钟前` : m < 1440 ? `${Math.round(m / 60)} 小时前` : `${Math.round(m / 1440)} 天前`;
-}
-
-function locationLine(u) {
-  const loc = u.state.location;
-  if (!loc || Date.now() - Date.parse(loc.at) > LOCATION_FRESH) return '';
-  const km = Math.max(1, Math.round(loc.accuracy / 1000));
-  return `${loc.label || '未知地点'}（误差约 ${km} 公里，坐标约 ${loc.lat.toFixed(2)},${loc.lon.toFixed(2)}，${agoText(Date.now() - Date.parse(loc.at))}更新）`;
-}
-
-const uniq = (parts) => parts.filter((p, i) => p && parts.indexOf(p) === i);
-
-// 两家一起查再拼：市、区用 BigDataCloud（地级市和区都准，zh-Hans 给简体）；街道用 OpenStreetMap Nominatim。
-// Nominatim 在中国的「city」常常是区，还会在区界附近给错区（把街道标到隔壁的区），所以只作兜底。
-// 浏览器给的是 WGS-84 坐标，两家都按 WGS-84 解析。
-async function reverseGeocode(lat, lon) {
-  const get = (url) => fetch(url, { headers: GEO_UA, signal: AbortSignal.timeout(8_000) }).then((r) => r.json()).catch(() => null);
-  const [osm, bdc] = await Promise.all([
-    get(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&zoom=16&accept-language=zh-CN`),
-    get(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=zh-Hans`),
-  ]);
-  const a = osm?.address || {};
-  const province = bdc?.principalSubdivision || a.state || '';
-  const city = bdc?.city || (/市$/.test(a.state || '') ? a.state : '') || a.city || '';
-  const bdcDistrict = bdc?.locality && bdc.locality !== city ? bdc.locality : '';
-  const district = bdcDistrict || a.city_district || a.district || a.county || (a.city !== city ? a.city : '') || '';
-  const suburb = a.suburb || a.town || a.township || a.village || '';
-  return {
-    country: a.country || bdc?.countryName || '', province, city, district, suburb,
-    label: uniq([city || province, district, suburb]).join(' '),
-  };
-}
-
-const distanceKm = (a, b) => {
-  const r = Math.PI / 180;
-  const x = (b.lon - a.lon) * r * Math.cos(((a.lat + b.lat) / 2) * r);
-  return 6371 * Math.hypot(x, (b.lat - a.lat) * r);
-};
-
-async function setLocation(u, { lat, lon, accuracy }) {
-  lat = Number(lat); lon = Number(lon); accuracy = Math.max(1, Number(accuracy) || 1000);
-  if (!(Math.abs(lat) <= 90 && Math.abs(lon) <= 180)) throw new Error('坐标不对');
-  const state = u.state;
-  const prev = state.location;
-  // 300 米内没动就沿用上次的地名，少调一次反查（Nominatim 限速每秒 1 次）。
-  const place = prev?.label && distanceKm(prev, { lat, lon }) < 0.3 ? prev : await reverseGeocode(lat, lon);
-  state.location = {
-    lat, lon, accuracy: Math.round(accuracy), at: isoNow(),
-    country: place.country || '', province: place.province || '', city: place.city || '', district: place.district || '', suburb: place.suburb || '',
-    label: place.label || '',
-  };
-  save(u);
-  broadcast(u, { type: 'location', location: state.location });
-  return state.location;
-}
-
-// ---------- 技能面板：与 Pi 原生工具共享同一套文件和开关 ----------
-async function skillsAdmin(u, action, name) {
-  const ctx = createToolContext({ home: u.home });
-  if (action === 'list') {
-    const skills = await scanSkills(ctx, { includeDisabled: true });
-    return { skills: skills.map(({ content, dir, file, path: skillPath, ...skill }) => skill) };
-  }
-  return await loadSkill(ctx, name, { includeDisabled: true }) || { error: `没有这个技能：${name}` };
 }
 
 // ---------- HTTP ----------
@@ -1936,7 +1607,7 @@ function serveFile(res, file, fallback) {
 
 // ---------- 登录 ----------
 // cookie 里放登录会话的 token（库里只存哈希），HttpOnly + SameSite=Lax。线上走 HTTPS 时加 Secure 和 __Host- 前缀：
-// 同一主域名下的别的子域名（比如放 agent 网页的 sites.）没法种一个同名 cookie 来冒充。
+// 同一主域名下的别的子域名没法种一个同名 cookie 来冒充。
 const SECURE = PUBLIC_ORIGIN.startsWith('https://');
 const COOKIE = SECURE ? '__Host-cattuan' : 'cattuan_sid';
 const sessionCookie = (token, maxAge = 30 * 86400) => `${COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${SECURE ? '; Secure' : ''}`;
@@ -2013,7 +1684,7 @@ const PUBLIC_FILES = new Set(['/style.css', '/longcat-icon.svg', '/longcat-logo.
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
-  // 别的网页（包括 agent 做的网站）不能替用户调 App 的接口：有 Origin 的写请求必须来自 App 自己。
+  // 别的网页不能替用户调 App 的接口：有 Origin 的写请求必须来自 App 自己。
   // 在 HTTPS 反代后面，浏览器的 Origin 是 https://…，要和 PUBLIC_ORIGIN 比，不能拿 Host 拼 http://。
   if (req.method !== 'GET' && req.method !== 'HEAD' && req.headers.origin && req.headers.origin !== (PUBLIC_ORIGIN || `http://${req.headers.host}`)) {
     return sendJson(res, 403, { error: 'forbidden origin' });
@@ -2056,7 +1727,7 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, {
         me: { name: u.name, role: u.role },
         messages: state.messages.filter((m) => m.chatId === state.currentChat).slice(-200), chats: chatList(u), currentChat: state.currentChat,
-        tasks: state.tasks.slice(-50), goals: state.goals, activity: u.activity, location: state.location || null, sites: listSites(u), sitesOrigin: SITES_ORIGIN,
+        tasks: state.tasks.slice(-50), goals: state.goals, activity: u.activity,
         traceBase: u.role === 'admin' ? traceBase() : null, // 轨迹里是所有人的完整对话，只给管理员
       });
     }
@@ -2094,7 +1765,7 @@ const server = http.createServer(async (req, res) => {
       let d;
       try { d = await traceCtx.run(act, () => dispatch(u, text.trim(), files.length, chatId)); } catch (e) {
         console.error('[dispatch]', e.message);
-        d = { reply: '我这边网络有点卡，等下再说一次？', search: null, task: null, steer: null, stop: null, goal: null, goalDone: [], ledger: [], ledgerDelete: [], failed: true };
+        d = { reply: '我这边网络有点卡，等下再说一次？', search: null, task: null, steer: null, stop: null, goal: null, goalDone: [], failed: true };
       }
       // 额度：要派的后台任务、要建的目标超了，就不派、不建，回复换成说明
       const taskOver = d.task && overQuota(u, 'tasks');
@@ -2102,17 +1773,6 @@ const server = http.createServer(async (req, res) => {
       const goalOver = d.goal && goalLimit(u);
       if (goalOver) { d.goal = null; d.reply = goalOver; }
       const did = []; // 这一轮做了什么，作为这件事的结果进轨迹
-      if (d.ledgerDelete.length) {
-        activityStep(act, `删账 ${d.ledgerDelete.length} 笔`);
-        await mutateLedger(u, (entries) => entries.filter((e) => !d.ledgerDelete.includes(e.id)));
-        onLedgerChange(u);
-        did.push(`删了 ${d.ledgerDelete.length} 笔账`);
-      }
-      if (d.ledger.length) {
-        activityStep(act, '记账');
-        const added = await addLedgerEntries(u, d.ledger, 'chat');
-        if (added.length) did.push(`记账：${added.map((e) => `${e.note || e.category} ${money(e.amount)}`).join('、')}`);
-      }
       for (const g of d.goalDone) {
         activityStep(act, `完成目标「${g.title}」`);
         setGoalDone(g, true, '你在聊天里说不用再盯了');
@@ -2149,7 +1809,7 @@ const server = http.createServer(async (req, res) => {
     }
     // ---- 喵团简历上的数字 ----
     if (url.pathname === '/api/profile') {
-      return sendJson(res, 200, { ...state.stats, sites: listSites(u).length, goals: state.goals.length, ledger: readLedger(u).length, chats: state.chats.length, model: DISPATCH_MODEL });
+      return sendJson(res, 200, { ...state.stats, goals: state.goals.length, chats: state.chats.length, model: DISPATCH_MODEL });
     }
     // ---- 聊天：新建、切换、删除 ----
     if (url.pathname === '/api/chats' && req.method === 'GET') return sendJson(res, 200, { chats: chatList(u, url.searchParams.get('q') || ''), currentChat: state.currentChat });
@@ -2233,63 +1893,11 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { ok: true });
       }
     }
-    // ---- 记账 ----
-    if (url.pathname === '/api/ledger' && req.method === 'GET') {
-      const month = today().slice(0, 7);
-      let memory = '';
-      try { memory = fs.readFileSync(path.join(u.home, 'ledger', 'LEDGER.md'), 'utf8'); } catch {}
-      const entries = readLedger(u).filter((e) => e.date?.startsWith(month)).sort((a, b) => (b.date + b.createdAt).localeCompare(a.date + a.createdAt));
-      return sendJson(res, 200, { summary: ledgerSummary(u), entries: entries.slice(0, 100), memory });
-    }
-    if (url.pathname === '/api/ledger' && req.method === 'POST') {
-      const added = await addLedgerEntries(u, [await readBody(req)], 'app');
-      return added.length ? sendJson(res, 200, added[0]) : sendJson(res, 400, { error: '金额不对' });
-    }
-    if (url.pathname.startsWith('/api/ledger/') && req.method === 'DELETE') {
-      const id = path.basename(url.pathname);
-      await mutateLedger(u, (entries) => entries.filter((e) => e.id !== id));
-      onLedgerChange(u);
-      return sendJson(res, 200, { ok: true });
-    }
-    // ---- 用户位置 ----
-    if (url.pathname === '/api/location' && req.method === 'POST') {
-      try { return sendJson(res, 200, await setLocation(u, await readBody(req))); } catch (e) { return sendJson(res, 400, { error: e.message }); }
-    }
-    if (url.pathname === '/api/location' && req.method === 'DELETE') {
-      state.location = null;
-      save(u);
-      broadcast(u, { type: 'location', location: null });
-      return sendJson(res, 200, { ok: true });
-    }
-    // ---- 技能（只读展示；装不装由执行 agent 按需决定，见 app/tools/knowledge.mjs） ----
-    if (url.pathname === '/api/skills' && req.method === 'GET') return sendJson(res, 200, await skillsAdmin(u, 'list'));
-    const skillMatch = /^\/api\/skills\/([\w.-]+)$/.exec(url.pathname);
-    if (skillMatch && req.method === 'GET') return sendJson(res, 200, await skillsAdmin(u, 'show', skillMatch[1]));
-    // ---- 社媒账号备忘录：已关注的账号（执行 agent 的 official_account 维护） ----
-    if (url.pathname === '/api/follows') {
-      return sendJson(res, 200, readJson(path.join(u.home, 'official_accounts.json'), []));
-    }
-    // ---- 沙箱登录（转发给沙箱的 /sessions、/login、/login/done）：登录状态大家都能看；登录窗口只有管理员能开 ----
-    if (url.pathname === '/api/sessions') {
-      const r = await sandbox('/sessions').catch(sandboxDown);
-      return sendJson(res, r.status, r.body);
-    }
-    if ((url.pathname === '/api/login' || url.pathname === '/api/login/done') && u.role !== 'admin') {
-      return sendJson(res, 403, { error: 'admin_only', message: '平台账号由管理员统一登录' });
-    }
-    if (url.pathname === '/api/login' && req.method === 'POST') {
-      const { platform = '' } = await readBody(req);
-      const r = await sandbox(`/login?platform=${encodeURIComponent(platform)}`, 90_000).catch(sandboxDown);
-      return sendJson(res, r.status, r.body);
-    }
-    if (url.pathname === '/api/login/done' && req.method === 'POST') {
-      const r = await sandbox('/login/done', 90_000).catch(sandboxDown);
-      return sendJson(res, r.status, r.body);
-    }
     const frameMatch = /^\/api\/frames\/(t_[a-z0-9]+)\/([\w-]+\.jpg)$/.exec(url.pathname);
     if (frameMatch) return serveFile(res, path.join(u.dir, 'frames', frameMatch[1], frameMatch[2]));
     if (url.pathname.startsWith('/api/uploads/')) return serveFile(res, path.join(u.dir, 'uploads', path.basename(url.pathname)));
     if (url.pathname === '/api/img') return await proxyImage(res, url.searchParams.get('u') || '');
+    if (url.pathname.startsWith('/api/')) return sendJson(res, 404, { error: 'not found' }); // 没有的接口（包括已删掉的记账、位置、技能、社媒登录）不回落到页面
     const file = path.join(PUBLIC_DIR, url.pathname === '/' ? 'index.html' : url.pathname);
     if (!file.startsWith(PUBLIC_DIR)) return sendJson(res, 403, { error: 'forbidden' });
     return serveFile(res, file, () => serveFile(res, path.join(PUBLIC_DIR, 'index.html')));
@@ -2300,46 +1908,6 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-// ---------- 网站服务（:3211）：只读地提供 agent 做的网页 ----------
-// 和 App 不同端口 = 不同源，网页里的脚本碰不到 App 的接口和存储；CSP 只放行 https 外链，
-// 网页没法请求本机的 agent（8650）、沙箱（8660）和 App 接口；只能被 App 嵌入。
-const SITE_CSP = [
-  "default-src 'self' https: data: blob:",
-  "script-src 'self' 'unsafe-inline' 'unsafe-eval' https:",
-  "style-src 'self' 'unsafe-inline' https:",
-  `img-src 'self' https: data: blob: ${APP_ORIGINS.join(' ')}`, // 允许用 App 的图片代理
-  "font-src 'self' https: data:",
-  "connect-src 'self' https:",
-  "media-src 'self' https: data: blob:",
-  "frame-src https:",
-  "form-action 'self'",
-  "base-uri 'self'",
-  `frame-ancestors ${APP_ORIGINS.join(' ')}`,
-].join('; ');
-
-const sitesServer = http.createServer((req, res) => {
-  const notFound = () => { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('没有这个网站'); };
-  if (req.method !== 'GET' && req.method !== 'HEAD') { res.writeHead(405); return res.end(); }
-  let parts;
-  try { parts = decodeURIComponent(new URL(req.url, 'http://x').pathname).split('/').filter(Boolean); } catch { return notFound(); }
-  const [id, ...rest] = parts;
-  const dir = findSiteDir(id);
-  if (!dir) return notFound();
-  if (!rest.length && !req.url.split('?')[0].endsWith('/')) { res.writeHead(301, { Location: `/${id}/` }); return res.end(); }
-  const file = path.join(dir, ...(rest.length ? rest : ['index.html']));
-  if (!file.startsWith(dir + path.sep) || /^(meta\.json|.*\.prev\..*|.*\.tmp)$/.test(path.basename(file))) return notFound();
-  if (!fs.existsSync(file) || fs.statSync(file).isDirectory()) return notFound();
-  res.writeHead(200, {
-    'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
-    'Content-Security-Policy': SITE_CSP,
-    'X-Content-Type-Options': 'nosniff',
-    'Cache-Control': 'no-cache',
-  });
-  if (req.method === 'HEAD') return res.end();
-  fs.createReadStream(file).pipe(res);
-});
-sitesServer.listen(SITES_PORT, HOST);
-
 // 启动：把没停用的账号都载进来，各自的任务接着跑、目标接着盯
 for (const row of accounts.activeUsers()) loadUser(row);
 if (!accounts.listUsers().length) console.log('还没有账号：node scripts/user.mjs invite <名字> --admin（从单用户版升级：node scripts/user.mjs adopt <你的名字>）');
@@ -2349,7 +1917,7 @@ server.requestTimeout = 0;
 server.listen(PORT, HOST, () => {
   const all = [...users.values()].flatMap((u) => u.state.tasks);
   const resumed = all.filter((t) => t.status === 'queued').length;
-  console.log(`CatTuan app → ${PUBLIC_ORIGIN || `http://localhost:${PORT}`}  (${users.size} 个账号, 网站 ${SITES_ORIGIN}${resumed ? `，续跑 ${resumed} 个任务` : ''})`);
+  console.log(`CatTuan app → ${PUBLIC_ORIGIN || `http://localhost:${PORT}`}  (${users.size} 个账号${resumed ? `，续跑 ${resumed} 个任务` : ''})`);
   setTimeout(() => {
     for (const t of all.filter((x) => x.reattach)) { delete t.reattach; runTask(t); }
     pump();

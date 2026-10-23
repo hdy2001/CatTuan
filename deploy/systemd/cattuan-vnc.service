@@ -1,9 +1,0 @@
-[Unit]
-Description=把虚拟显示 :99 共享成 VNC（只听 127.0.0.1:5900；管理员登录平台时才开）
-Requires=cattuan-xvfb.service
-After=cattuan-xvfb.service
-
-[Service]
-User=cattuan
-ExecStart=/usr/bin/x11vnc -display :99 -localhost -rfbport 5900 -nopw -forever -shared -quiet
-Restart=on-failure
