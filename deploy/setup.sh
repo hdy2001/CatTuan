@@ -35,14 +35,12 @@ echo "==> 配置：$ENV_FILE、LongCat key、Caddy"
 PUBLIC_ORIGIN=
 # 调试用的注册接口 POST /api/auth/register：要用时改成 1
 ALLOW_REGISTER=0
-# 成员的每日额度、后台任务并发（管理员不限）。下面是默认值，要改就去掉 #
+# 成员的每日额度（管理员不限）。下面是默认值，要改就去掉 #
 # QUOTA_MESSAGES_PER_DAY=300
 # QUOTA_TASKS_PER_DAY=40
 # QUOTA_GOAL_CHECKS_PER_DAY=48
 # QUOTA_GOALS=5
 # QUOTA_GOAL_MIN_EVERY=60
-# MAX_RUNNING=4
-# MAX_RUNNING_PER_USER=2
 EOF
 sed -i "s|^PUBLIC_ORIGIN=.*|PUBLIC_ORIGIN=${APP_DOMAIN:+https://$APP_DOMAIN}|" "$ENV_FILE"
 chown "root:$APP_USER" "$ENV_FILE" && chmod 640 "$ENV_FILE"

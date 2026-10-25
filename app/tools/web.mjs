@@ -182,7 +182,7 @@ export function createWebTools(ctx) {
   };
   return [
     tool('deep_web_search', 'deepsearch', {
-      description: '用必应搜网页（在真实浏览器里搜，中文结果好）。深度搜索时多换几个角度的关键词：官方说法、对比、评测、时间范围、反方观点。返回标题、网址和摘要；摘要不够就用 read_webpage 读原文。',
+      description: '用必应搜网页（在真实浏览器里搜，中文结果好），返回标题、网址和摘要；摘要不够就用 read_webpage 读原文。问到具体的店、品牌、产品、人物、事件、价格、地址、营业时间、新闻时，先用它查，不要凭记忆答。深度搜索时多换几个角度的关键词：官方说法、对比、评测、时间范围、反方观点。',
       parameters: object({ query: str('搜索词，例如「看天下 杂志 图书馆 数字资源」') }, ['query']),
     }, wrap(async ({ query = '' }, signal) => {
       query = query.trim();
