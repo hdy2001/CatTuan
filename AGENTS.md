@@ -7,7 +7,8 @@
 喵团 CatTuan 是个人助理 Web App，提供聊天、后台任务、持续目标、搜索、搜图识图和通话能力。
 
 - 技术栈：Node.js >= 22.19、JavaScript ESM（`.mjs`）、原生 HTML/CSS/JS、`node:sqlite`、Playwright。`app/` 与 `sandbox/` 各自管理 npm 依赖和锁文件，根目录没有 npm 包。
-- 调度层：`app/server.mjs` 负责 HTTP API、调度模型、任务队列、目标调度、SSE 和结果展示；调度模型直接调用 LongCat。
+- 主 agent：`app/dispatcher.mjs` 每个聊天一个 Pi 会话，在 App 进程里跑。它自己干活（和子 agent 同一套业务工具，不含打电话），复杂的事用 `subagent` 工具派子 agent；聊天专用工具在 `app/dispatcher-tools.mjs`。`app/server.mjs` 负责 HTTP API、任务队列、目标调度、SSE 和结果展示。
+- 子 agent：派出时 App 把主 agent 会话复制成 `task-<任务 id>`，在执行层的 gateway 里跑，工具和主 agent 一样，外加打电话。
 - 执行层：`app/pi-gateway.mjs` 提供 `/v1/runs`、事件流、停止和插话接口；`app/pi-runtime.mjs` 使用 Pi SDK 管理模型循环与持久化会话。
 - 工具层：`app/pi-tools.mjs` 注册工具、应用配置开关并传递取消信号；`app/tools/business.mjs`、`web.mjs`、`knowledge.mjs` 实现业务能力，`common.mjs` 提供文件锁、原子写入和配置读写。
 - 账号层：`app/accounts.mjs` 管理账号和登录；`app/homes.mjs` 解析每个用户的数据目录与 gateway 凭据；`scripts/agents.mjs` 守护各账号的执行进程。

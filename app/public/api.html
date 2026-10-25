@@ -591,7 +591,7 @@ section { background: var(--bg); }
     S.pending.push({ text, n: images.length }); renderMessages();
     $('send').disabled = true;
     const t0 = performance.now();
-    $('hint').textContent = '等调度模型想完…（回复会先从 SSE 到）';
+    $('hint').textContent = '发送中…（回复从 SSE 到）';
     const r = await api('POST', '/api/message', { text, images, ...(ask && { ask }) });
     $('send').disabled = false;
     $('hint').textContent = `POST /api/message → ${r.status || 'ERR'}，用时 ${((performance.now() - t0) / 1000).toFixed(1)}s`;

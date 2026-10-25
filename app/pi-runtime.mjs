@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
@@ -11,6 +12,24 @@ export class RuntimeError extends Error {
 }
 
 const TERMINAL = new Set(['run.completed', 'run.failed', 'run.cancelled']);
+
+/** Directory holding the Pi session files of one CatTuan session id. */
+export const sessionDir = (agentDir, sessionId) => path.join(path.resolve(agentDir), 'sessions', createHash('sha256').update(sessionId).digest('hex'));
+
+/**
+ * Copy the latest Pi session in fromDir into toDir as a new forked session, so
+ * a run opened on toDir continues from the same history. Returns false when
+ * fromDir has no persisted conversation yet.
+ */
+export function forkSession({ home, fromDir, toDir }) {
+  if (!existsSync(fromDir)) return false;
+  const file = SessionManager.continueRecent(path.resolve(home), fromDir).getSessionFile();
+  if (!file || !existsSync(file)) return false;
+  mkdirSync(toDir, { recursive: true, mode: 0o700 });
+  SessionManager.forkFrom(file, path.resolve(home), toDir);
+  return true;
+}
+
 const optionalText = async (filename) => {
   try { return await readFile(filename, 'utf8'); }
   catch (error) { if (error.code === 'ENOENT') return ''; throw error; }
@@ -64,10 +83,13 @@ function toolText(result) {
 export async function createPiRuntime({
   home, env = process.env, createPiTools, createSession = createAgentSession,
   modelRuntime: suppliedModels, now = Date.now,
+  // Optional hooks for a second Pi agent hosted by the App (the chat dispatcher).
+  // Defaults keep the executor gateway's resources and event protocol unchanged.
+  agentDir: suppliedAgentDir, instructions: buildInstructions = instructions, emitMessages = false,
 } = {}) {
   if (!home) throw new Error('Pi runtime requires a user home');
   home = path.resolve(home);
-  const agentDir = path.join(home, 'pi');
+  const agentDir = path.resolve(suppliedAgentDir || path.join(home, 'pi'));
   await mkdir(path.join(agentDir, 'sessions'), { recursive: true, mode: 0o700 });
   const modelId = env.PI_MODEL || 'LongCat-2.5-Preview';
   const contextWindow = positiveInteger(env.PI_CONTEXT_WINDOW, 128000, 'PI_CONTEXT_WINDOW');
@@ -115,9 +137,9 @@ export async function createPiRuntime({
     try {
       bridge = await toolsFactory({ home, sessionId: run.sessionId, signal: run.controller.signal, env });
       if (run.controller.signal.aborted) throw run.controller.signal.reason;
-      const sessionDir = path.join(agentDir, 'sessions', createHash('sha256').update(run.sessionId).digest('hex'));
-      await mkdir(sessionDir, { recursive: true, mode: 0o700 });
-      await writeFile(path.join(sessionDir, 'task.json'), JSON.stringify({ task_session_id: run.sessionId }) + '\n', { mode: 0o600 });
+      const dir = sessionDir(agentDir, run.sessionId);
+      await mkdir(dir, { recursive: true, mode: 0o700 });
+      await writeFile(path.join(dir, 'task.json'), JSON.stringify({ task_session_id: run.sessionId }) + '\n', { mode: 0o600 });
       const settingsManager = SettingsManager.inMemory({
         cacheWarming: 'off', enableAnalytics: false, enableInstallTelemetry: false,
         retry: { enabled: false, provider: { maxRetries: 0 } },
@@ -128,8 +150,8 @@ export async function createPiRuntime({
         // An explicit allowlist keeps every built-in filesystem/shell tool off,
         // even if a Pi version changes its default tool selection.
         noTools: 'builtin', tools: bridge.tools.map((tool) => tool.name), customTools: bridge.tools,
-        resourceLoader: resourceLoader(await instructions(home, bridge)),
-        sessionManager: SessionManager.continueRecent(home, sessionDir), settingsManager,
+        resourceLoader: resourceLoader(await buildInstructions(home, bridge)),
+        sessionManager: SessionManager.continueRecent(home, dir), settingsManager,
       }));
       run.session = session;
       if (run.controller.signal.aborted) { await session.abort(); throw run.controller.signal.reason; }
@@ -140,6 +162,13 @@ export async function createPiRuntime({
           // abort() signals synchronously; its promise settles after the loop.
           // Do not await it from a Pi event listener, which is inside that loop.
           void session.abort().catch(() => {});
+        } else if (emitMessages && event.type === 'message_update' && event.assistantMessageEvent?.type === 'text_delta') {
+          emit(run, { event: 'message.delta', delta: event.assistantMessageEvent.delta });
+        } else if (emitMessages && event.type === 'message_end' && event.message?.role === 'assistant') {
+          const content = Array.isArray(event.message.content) ? event.message.content : [];
+          const text = content.filter((block) => block.type === 'text').map((block) => block.text).join('').trim();
+          const toolCalls = content.filter((block) => block.type === 'toolCall').length;
+          if (text || toolCalls) emit(run, { event: 'message.completed', text, tool_calls: toolCalls });
         } else if (event.type === 'tool_execution_start') {
           toolArgs.set(event.toolCallId, event.args);
           emit(run, { event: 'tool.started', tool_call_id: `${run.id}:${event.toolCallId}`, tool: event.toolName, args: event.args });
