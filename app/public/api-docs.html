@@ -112,7 +112,7 @@ body.no-api .console-body { display: none; }
 </nav>
 <main>
 <h1>喵团聊天接口</h1>
-<p class="sub">核心聊天功能的 HTTP + SSE 接口。根据 <code>app/server.mjs</code> 当前代码（main 分支，含 Bearer token 支持）整理，并于 2026-10-23 在本地逐个实测过。</p>
+<p class="sub">核心聊天功能的 HTTP + SSE 接口，路由在 <code>app/http/routes.mjs</code>。2026-10-23 在本地逐个实测过；2026-10-26 重构后消息、任务、目标的数据结构改成了通用的 <code>attachments</code>（见「数据结构」），由 <code>app/e2e.test.mjs</code> 端到端验证。</p>
 
 <h2 id="overview">概览与鉴权</h2>
 <table>
@@ -156,7 +156,7 @@ for try await line in bytes.lines where line.hasPrefix("data:") {
   <li><code>POST /api/message</code> 发用户的话。服务端存好消息就<b>马上返回</b> <code>{"ok":true}</code>，响应里不带回复内容。</li>
   <li>SSE 依次推来：<code>message</code>（用户自己这条）→ <code>activity</code>（running，"想想怎么回"）→ <code>message</code>（喵团的回复，可能 1–3 条）→ <code>activity</code>（done）。</li>
   <li><b>一条消息不一定有单独的回复</b>：喵团还在想上一条时又发来的消息，会并进正在想的那一轮，几条合起来回。所以不要按"一次 POST 对应一条回复"来等，一律以 SSE 为准，按 <code>id</code> 去重、按 <code>chatId</code> 归到聊天。</li>
-  <li>如果调度模型判断要派后台任务：回复消息带 <code>taskId</code>，随后推 <code>task</code> 事件（queued → running → done/failed）。任务跑完后，喵团会再推 1–3 条带 <code>partOf: 任务id</code> 的消息转述结果，内容长时最后再跟一条 <code>report</code> 卡片。</li>
+  <li>如果主 agent 派了子 agent：回复消息带 <code>taskId</code>，随后推 <code>task</code> 事件（queued → running → done/failed）。任务跑完后，喵团会再推 1–3 条带 <code>partOf: 任务id</code> 的消息转述结果，子 agent 附上的图、文档、通话组件挂在最后一条的 <code>attachments</code> 里。</li>
 </ol>
 <pre><code>client                          server
   │ POST /api/message {text}  ──▶ │ 存消息，交给调度者
@@ -166,7 +166,7 @@ for try await line in bytes.lines where line.hasPrefix("data:") {
   │ ◀── SSE message(role=bot, taskId?) × 1–3（约 3–5 秒；要先上网搜的约 10 秒）
   │ ◀── SSE task(queued→running→done)   ← 有后台任务时
   │ ◀── SSE activity(deliver …)   │
-  │ ◀── SSE message(partOf=任务id) × 1–3，最后一条可能带 report</code></pre>
+  │ ◀── SSE message(partOf=任务id) × 1–3，最后一条可能带 attachments</code></pre>
 
 <h2 id="auth">登录接口</h2>
 
@@ -256,7 +256,7 @@ for try await line in bytes.lines where line.hasPrefix("data:") {
 // 400 {"error":"改不了这个任务"}  ← text 为空，或任务不能改</code></pre></div>
 
 <div class="ep"><h3><span class="m POST">POST</span><code>/api/tasks/:id/stop</code></h3>
-<pre><code>{ "ok": true }   // 同时推一条 bot 消息「好，「xx」先停了～」（带 stopOf）
+<pre><code>{ "ok": true }   // 同时推一条 bot 消息「好，「xx」先停了～」（带 taskId）
 // 409 {"error":"这个任务已经结束了"}</code></pre></div>
 
 <div class="ep"><h3><span class="m POST">POST</span><code>/api/tasks/:id/retry</code></h3>
@@ -292,13 +292,10 @@ for try await line in bytes.lines where line.hasPrefix("data:") {
 <tr><td><code>taskId</code>, <code>round</code></td><td>string, number</td><td>这条消息派出了 / 对应哪个任务的第几轮。任务结果的最后一条也带</td></tr>
 <tr><td><code>partOf</code></td><td>string</td><td>属于哪个任务的结果转述（一个结果可能拆成几条）</td></tr>
 <tr><td><code>took</code></td><td>number</td><td>任务这一轮用了多少秒（结果最后一条上）</td></tr>
-<tr><td><code>report</code></td><td><code>{title, body, kind?, sources?}</code></td><td>结果全文 / 研究报告卡片。<code>body</code> 是 Markdown；<code>sources</code> 是 <code>[{n, title, url}]</code></td></tr>
-<tr><td><code>photos</code></td><td>array</td><td>任务找到的图片</td></tr>
-<tr><td><code>booking</code></td><td>object</td><td>交互卡片。<code>type:"ask"</code> 是提问卡片（见下）；<code>type:"calls"</code> 是电话结果</td></tr>
-<tr><td><code>steerOf</code> / <code>stopOf</code></td><td>string</td><td>这条回复是在改 / 停哪个任务</td></tr>
-<tr><td><code>goalId</code></td><td>string</td><td>建了目标时</td></tr>
+<tr><td><code>attachments</code></td><td><code>[{type, …}]</code></td><td>挂在消息下面的东西，按 <code>type</code> 画：<br><code>images</code> <code>{items: [{id, title, site, image, thumb, page}]}</code> 图墙 · <code>document</code> <code>{title, body, sources}</code> 文档 / 研究报告卡片（<code>body</code> 是 Markdown，<code>sources</code> 是 <code>[{n, title, url}]</code>）· <code>ask</code> 提问卡片（见下）· <code>calls</code> <code>{calls: [通话记录]}</code> 通话组件。不认识的 <code>type</code> 跳过即可</td></tr>
+<tr><td><code>goalId</code></td><td>string</td><td>建了目标时；带 <code>taskId</code> 时是目标检查的新进展</td></tr>
 </table>
-<p>提问卡片 <code>booking</code>（喵团缺信息时出，最多 4 题，每题 2–4 个选项）：</p>
+<p>提问卡片 <code>{type: "ask"}</code>（喵团缺信息时出，最多 4 题，每题 2–4 个选项）：</p>
 <pre><code>{ "type": "ask", "questions": [
     { "key": "q0", "tab": "人数", "label": "几个人去？",
       "options": [{ "label": "一个人", "value": "一个人", "hint": "可选" }, …] } ],
@@ -317,16 +314,16 @@ for try await line in bytes.lines where line.hasPrefix("data:") {
 <tr><th>字段</th><th>说明</th></tr>
 <tr><td><code>id</code>, <code>title</code></td><td><code>t_…</code>；标题 ≤ 20 字</td></tr>
 <tr><td><code>status</code></td><td><code>queued</code> 排队中 · <code>running</code> 进行中 · <code>done</code> 已完成 · <code>failed</code> 失败 · <code>stopped</code> 已停止</td></tr>
-<tr><td><code>kind</code></td><td><code>chat</code> 普通 · <code>research</code> 深度搜索 · <code>goal</code> 目标检查</td></tr>
+<tr><td><code>kind</code></td><td><code>chat</code> 子 agent 任务 · <code>goal</code> 目标检查；<code>skills</code> 是让它先加载的技能（比如 <code>deep-research</code>）</td></tr>
 <tr><td><code>category</code></td><td><code>life</code> / <code>work</code> / <code>coding</code> / <code>social</code>（图标用，可能没有）</td></tr>
 <tr><td><code>chatId</code>, <code>query</code></td><td>从哪个聊天、哪句话派出来的</td></tr>
 <tr><td><code>round</code>, <code>history</code></td><td>第几轮（steer 后 +1）；每轮的状态、起止时间</td></tr>
-<tr><td><code>steps</code></td><td>执行步骤 <code>[{id, name, label, status: running|done, at, endedAt, …}]</code>，<code>label</code> 是给人看的（如"搜图片"）</td></tr>
+<tr><td><code>steps</code></td><td>这一轮的步骤 <code>[{id, name, label, title, detail, ok, status: running|done, at, endedAt, browser?, progress?}]</code>：<code>title</code> / <code>detail</code> 是工具自己写好的一句人话；<code>browser</code> 是用了沙箱浏览器；<code>progress</code> 是进行中的状态（打电话时是 <code>{type: "call", call}</code>）</td></tr>
 <tr><td><code>revisions</code></td><td>用户的修改要求（Revision 列表）</td></tr>
-<tr><td><code>result</code></td><td><code>{text, photos, pendingSteer}</code>，<code>text</code> 是执行 agent 的原始结果全文</td></tr>
+<tr><td><code>result</code></td><td><code>{text, attachments}</code>：子 agent 交回的文字和附上的东西（结构同 Message）；目标检查还有 <code>check: {status, notify, done}</code></td></tr>
 <tr><td><code>error</code></td><td>失败原因</td></tr>
 <tr><td><code>createdAt</code>, <code>startedAt</code>, <code>endedAt</code></td><td>ISO 时间</td></tr>
-<tr><td><code>brief</code>, <code>sessionId</code>, <code>runId</code>, <code>lastSeq</code>, <code>uid</code>…</td><td>内部字段，client 不要依赖</td></tr>
+<tr><td><code>brief</code>, <code>forked</code>, <code>resumed</code>…</td><td>内部字段，client 不要依赖</td></tr>
 </table>
 
 <h3>Activity</h3>
@@ -371,7 +368,7 @@ for try await line in bytes.lines where line.hasPrefix("data:") {
 <tr><td>聊天搜索、新建、切换、删除；删除不存在的聊天 404</td><td class="pass">通过</td></tr>
 <tr><td>退出登录后会话作废 401</td><td class="pass">通过</td></tr>
 <tr><td>Bearer token：登录 / 注册拿 token（不下发 cookie）；用 token 调 me、state、SSE、发消息、取图片；token 错 401；scheme 大小写不敏感；退出后 token 401、同账号 cookie 会话不受影响；停用账号后 token 立刻 401；<code>"token"</code> 不是 <code>true</code> 时仍走 cookie</td><td class="pass">通过</td></tr>
-<tr><td>App 自带测试 <code>npm test --prefix app</code></td><td class="pass">26/26 通过</td></tr>
+<tr><td>App 自带测试 <code>npm test --prefix app</code>（10-26 重构后，含端到端测试）</td><td class="pass">全部通过</td></tr>
 </table>
 
 </main>

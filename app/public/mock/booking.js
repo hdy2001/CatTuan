@@ -6,7 +6,7 @@
 // 除了提问选项卡，聊天里只有通话组件：每通电话打完挂在那条消息下面，点开看详情和转写。喵团有自己的电话：侧边栏「喵团档案 → 电话」里是全部通话记录。
 // URL 参数：variant=happy|decide|noanswer|query|spa（五种场景）、step=0..N（演到第几步）、clean=1（隐藏控制条和像素小猫）
 // 左下角控制条：‹ › 或键盘 ← → 切步骤，H 隐藏 / 显示控制条和小猫。也可以在提问选项卡上选、在输入框里打字往下走。
-import { noticeHtml, openCallLog, openCallDetail, closeCallSheet } from '../booking.js';
+import { noticeHtml, openCallLog, openCallDetail, closeCallSheet, askOf } from '../ui/cards.js';
 
 const AGENT = '喵团'; // 电话里的自称；PRD 截图要用 Longcat 就改这里
 const PHONE_TAIL = '5678'; // 演示账号的手机尾号
@@ -89,7 +89,7 @@ function derived() {
 function push(m) { const msg = { id: `mock_${++seq}`, at: stamp(), ...m }; api.S.messages.push(msg); return msg; }
 const me = (text) => push({ role: 'me', text });
 const bot = (text, extra) => push({ role: 'bot', text, ...extra });
-const msgWith = (type) => [...api.S.messages].reverse().find((m) => m.booking?.type === type);
+const msgWith = (type) => [...api.S.messages].reverse().find((m) => m.attachments?.some((a) => a.type === type));
 const msgOf = (el) => api.S.messages.find((m) => m.id === el.closest('[data-mid]')?.dataset.mid);
 
 // 喵团（主 agent）回一句话：和真的 App 一样 —— 聊天里只显示「…」，做到哪一步在顶栏状态里。
@@ -162,7 +162,7 @@ function callScript(kind) {
     shop('好的，给您约上了，到店报手机尾号就行，保留 15 分钟。'), repeat(t), shop('对的。'), ai('好的，谢谢您，再见。')] };
 }
 
-// 任务的步骤条（任务页和小电视用）跟着通话阶段走
+// 任务的步骤条（任务页和小电视用）跟着通话阶段走；第一步带上通话状态（和真的 phone_call 工具的 progress 一样），任务页画成通话组件
 const STEP = { queued: '排队', dialing: '拨号', talking: '通话中', verifying: '核对结果' };
 const ORDER = ['queued', 'dialing', 'talking', 'verifying'];
 function syncSteps(t) {
@@ -171,6 +171,7 @@ function syncSteps(t) {
   else if (s === 'waiting') t.steps = [...ORDER.map((k) => ({ label: STEP[k], status: 'done' })), { label: '等你决定', status: 'running' }];
   else if (s === 'done') t.steps = ORDER.map((k) => ({ label: STEP[k], status: 'done' }));
   else t.steps = ORDER.slice(0, ORDER.indexOf(s) + 1).map((k, i, a) => ({ label: STEP[k], status: i < a.length - 1 ? 'done' : 'running' }));
+  t.steps[0].progress = { type: 'call', call: t.call };
 }
 function setStage(t, stage) { t.call.stage = stage; syncSteps(t); api.render(); }
 
@@ -178,7 +179,7 @@ function setStage(t, stage) { t.call.stage = stage; syncSteps(t); api.render(); 
 function newCall(title, script, { to = R.ctx.shop, brief = briefText() } = {}) {
   const at = stamp();
   const t = {
-    id: `t_mock_${++seq}`, title, kind: 'call', status: 'running', createdAt: at, startedAt: at, steps: [], brief,
+    id: `t_mock_${++seq}`, title, kind: 'chat', status: 'running', createdAt: at, startedAt: at, steps: [], brief,
     // 外呼平台：每个号码每天最多拨 2 次（没人接就 30 分钟后重拨 1 次）；通话加整理结果大约 1–5 分钟
     call: { shop: to.name, short: to.short, phone: to.phone, agent: AGENT, stage: 'queued', lines: [], attempt: 1, maxAttempts: 2, eta: '1–5 分钟内', retryIn: '30 分钟', dialedAt: at },
   };
@@ -204,7 +205,7 @@ function logCall(t, summary, { status = 'done', seconds = R.script.seconds } = {
   R.calls.push(rec);
   return rec;
 }
-const callCards = (...recs) => ({ type: 'calls', calls: recs }); // 消息下面挂的通话组件（m.booking）
+const callCards = (...recs) => ({ attachments: [{ type: 'calls', calls: recs }] }); // 消息下面挂的通话组件
 const NO_ANSWER = { status: 'noanswer', seconds: 40 }; // 没人接：响了 40 秒
 
 // 挂断：补齐转写、任务结束（或停下来等用户决定）
@@ -264,7 +265,7 @@ async function spaReport() {
   if (t.status === 'running') hangUp(t);
   t.result = { text: `问到了：${s.reply}只问不约，没有留用户信息。` };
   const rec = logCall(t, s.reply);
-  await reply(() => bot(`✅ ${s.short}：${s.reply}`, { booking: callCards(rec) }), 800, relay());
+  await reply(() => bot(`✅ ${s.short}：${s.reply}`, callCards(rec)), 800, relay());
 }
 
 // ---------- 每一步 ----------
@@ -296,7 +297,7 @@ const BEATS = {
       await reply(() => botParts([
         `${c.shop.short}电话 ${c.shop.phone}，营业到 ${c.shop.hours.split('–')[1]}，可以帮你打过去问。`,
         '打之前还差几个信息：做什么项目、明天几点，问到有空要不要直接帮你约？选一下，或者直接回我就行：',
-      ], { booking: {
+      ], { attachments: [{
         type: 'ask', cur: 0, answers: {},
         questions: [
           { key: 'item', tab: '项目', label: '做什么项目？', options: ITEMS.map((x) => ({ label: x, value: x })) },
@@ -306,7 +307,7 @@ const BEATS = {
             { label: '只问问，先别约', value: 'query', hint: '问完回来告诉你，不留你的信息' },
           ] },
         ],
-      } }), 800, { steps: [['想想怎么回', 900], [`上网搜「${c.shop.short} 电话 营业时间」`, 1400], ['组织回答', 1100], ['发消息', 0]] });
+      }] }), 800, { steps: [['想想怎么回', 900], [`上网搜「${c.shop.short} 电话 营业时间」`, 1400], ['组织回答', 1100], ['发消息', 0]] });
     },
   },
   confirm: {
@@ -327,7 +328,7 @@ const BEATS = {
     // 要约的（会报手机尾号、会替用户答应）问一句「现在打吗」，等用户回了再打；只问不约的（不留信息、不答应任何事）说完就直接打，和附近 SPA 一样
     async run() {
       const q = msgWith('ask');
-      if (q) Object.assign(q.booking, { answers: { item: R.ctx.item, time: R.ctx.time, mode: R.ctx.mode }, answered: true });
+      if (q) Object.assign(askOf(q), { answers: { item: R.ctx.item, time: R.ctx.time, mode: R.ctx.mode }, answered: true });
       const { c } = derived();
       if (c.mode === 'query') {
         let t;
@@ -356,7 +357,7 @@ const BEATS = {
       t.call.stage = 'retry';
       syncSteps(t);
       const rec = logCall(t, '响了 40 秒没人接，30 分钟后再打一次。', NO_ANSWER);
-      await reply(() => bot('📞 店里没人接，我 30 分钟后再打一次（每家店一天最多打 2 次），有结果告诉你。', { booking: callCards(rec) }), 800, relay());
+      await reply(() => bot('📞 店里没人接，我 30 分钟后再打一次（每家店一天最多打 2 次），有结果告诉你。', callCards(rec)), 800, relay());
     },
   },
   redial: {
@@ -379,7 +380,7 @@ const BEATS = {
       t.result = { text: `店里明天下午都满了，最早 19:00，和用户要的 ${c.time} 对不上，没答应，回来问用户。${c.item} ${price} 元一位，到店付。` };
       const text = `⏸️ 店里说明天下午都满了，最早晚上七点，跟你要的${bare(c.time)}对不上，我没答应。${c.item} ${price} 一位，到店付。要约七点吗？`;
       const rec = logCall(t, `明天下午都满了，最早晚上七点，跟要的${bare(c.time)}对不上，没答应，说好确认后回电。${c.item} ${price} 一位，到店付。`);
-      await reply(() => bot(text, { booking: callCards(rec) }), 800, relay());
+      await reply(() => bot(text, callCards(rec)), 800, relay());
       showNotice(text);
     },
   },
@@ -408,7 +409,7 @@ const BEATS = {
       const parts = [`✅ ${variant === 'noanswer' ? '第二次打通了，' : ''}约好了！明天${spoken(booked)}，${c.shop.short}，${c.item} 1 位，一共 ${total} 元，到店付。`,
         `到店报手机尾号 ${PHONE_TAIL}，保留 15 分钟。`];
       const rec = logCall(t, `约好了：明天${spoken(booked)}，${c.item} 1 位，一共 ${total} 元，到店付；到店报手机尾号 ${PHONE_TAIL}，保留 15 分钟。`);
-      await reply(() => botParts(parts, { booking: callCards(rec) }), 800, relay());
+      await reply(() => botParts(parts, callCards(rec)), 800, relay());
       showNotice(parts.join(''));
     },
   },
@@ -422,7 +423,7 @@ const BEATS = {
       t.result = { text: `问到了：明天 ${c.time} 满了，${a}、${b} 有空；${c.item} ${price} 元一位，到店付。只问不约，没有留用户信息。` };
       const text = `✅ 问到了：明天${bare(c.time)}满了，${bare(a)}和${bare(b)}有空，${c.item} ${price} 一位，到店付。我只问了，没帮你约，要约哪个？`;
       const rec = logCall(t, `明天${bare(c.time)}满了，${bare(a)}和${bare(b)}有空，${c.item} ${price} 一位，到店付。只问了，没约。`);
-      await reply(() => bot(text, { booking: callCards(rec) }), 800, relay());
+      await reply(() => bot(text, callCards(rec)), 800, relay());
       showNotice(text);
     },
   },
@@ -469,7 +470,7 @@ const BEATS = {
       let next;
       await reply(() => {
         next = spaCall(c);
-        bot(`📞 ${b.short}没人接，先打${c.short}，30 分钟后再给${b.short}打一次。`, { booking: callCards(rec) });
+        bot(`📞 ${b.short}没人接，先打${c.short}，30 分钟后再给${b.short}打一次。`, callCards(rec));
       }, 800, relay(t));
       return spaRing(next);
     },
@@ -558,7 +559,7 @@ function setMode(mode) {
 
 // 提问选项卡：选了就跳到下一个没答的问题；都答完了，按选的往下走（替用户把这句话发出去）
 function chooseAsk(m, value) {
-  const b = m?.booking;
+  const b = askOf(m);
   if (!b || b.answered || busy || nextId() !== 'confirm') return;
   b.answers = { ...b.answers, [b.questions[b.cur].key]: value };
   const next = b.questions.findIndex((q) => !b.answers[q.key]);
@@ -585,7 +586,7 @@ function onClick(e) {
   const tab = e.target.closest('[data-ask-tab]');
   if (tab) {
     const m = msgOf(tab);
-    if (m && !m.booking.answered) { m.booking.cur = Number(tab.dataset.askTab); api.render(); }
+    if (askOf(m) && !askOf(m).answered) { askOf(m).cur = Number(tab.dataset.askTab); api.render(); }
     return;
   }
   if (e.target.closest('[data-ask-other]')) askOther();
@@ -671,8 +672,8 @@ export function start(a) {
   document.addEventListener('keydown', (e) => {
     if (e.target.closest?.('input, textarea, select') || e.metaKey || e.ctrlKey || e.altKey) return;
     const ask = /^[1-9]$/.test(e.key) && nextId() === 'confirm' && msgWith('ask');
-    if (ask && !ask.booking.answered) { // 提问选项卡：按数字选（仿 Claude Code）
-      const q = ask.booking.questions[ask.booking.cur];
+    if (ask && !askOf(ask).answered) { // 提问选项卡：按数字选（仿 Claude Code）
+      const q = askOf(ask).questions[askOf(ask).cur];
       const n = Number(e.key);
       if (n <= q.options.length) chooseAsk(ask, q.options[n - 1].value);
       else if (n === q.options.length + 1) { e.preventDefault(); askOther(); }

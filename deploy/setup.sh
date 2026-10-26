@@ -55,7 +55,7 @@ if ! grep -q '^LONGCAT_API_KEY=.' "$KEY_FILE"; then
 fi
 
 cat > /etc/caddy/Caddyfile <<EOF
-# deploy/setup.sh 生成，重跑会覆盖。App、沙箱、agent 都只听 127.0.0.1，对外只有这里。
+# deploy/setup.sh 生成，重跑会覆盖。App 和沙箱都只听 127.0.0.1，对外只有这里。
 ${APP_DOMAIN:-:80} {
 	encode gzip
 	# 聊天和任务进度靠 SSE 实时推，别缓冲
@@ -80,7 +80,7 @@ EnvironmentFile=$ENV_FILE
 ExecStart=$3
 Restart=always
 RestartSec=3
-# 先只给主进程发 SIGTERM（agents 守护进程会挨个停掉各人的 gateway），超时再全部杀掉
+# 先只给主进程发 SIGTERM（App 停掉进行中的那一轮、把状态写完再退），超时再全部杀掉
 KillMode=mixed
 TimeoutStopSec=40
 
@@ -89,7 +89,6 @@ WantedBy=multi-user.target
 EOF
 }
 unit sandbox '喵团沙箱浏览器 :8660' "$DIR/scripts/start-sandbox.sh"
-unit agents '喵团执行 agent（每个账号一个 Pi gateway）' "$(command -v node) $DIR/scripts/agents.mjs"
 unit app '喵团 App :3210' "$DIR/scripts/start-app.sh"
 mkdir -p /var/backups/cattuan && chown "$APP_USER:$APP_USER" /var/backups/cattuan && chmod 700 /var/backups/cattuan
 echo "0 4 * * * $APP_USER bash $DIR/deploy/backup.sh 2>&1 | logger -t cattuan-backup" > /etc/cron.d/cattuan
@@ -101,10 +100,18 @@ idle() {
   [ "$n" = 0 ]
 }
 for _ in $(seq 120); do idle && break; sleep 5; done
+# 停掉服务再把老数据转成新格式（可以重复跑，迁移前自动备份到 app/data/backups/）
+systemctl stop cattuan-app cattuan-agents 2>/dev/null || true
+[ -f "$DIR/app/data/app.db" ] && as_app 'node scripts/migrate.mjs'
+# 老版本每个账号单独跑一个 agent 服务（cattuan-agents），现在子 agent 在 App 里跑：停掉并删掉
+if [ -f /etc/systemd/system/cattuan-agents.service ]; then
+  systemctl disable --now cattuan-agents || true
+  rm -f /etc/systemd/system/cattuan-agents.service
+fi
 systemctl daemon-reload
 systemctl enable --now cron
-systemctl enable caddy cattuan-sandbox cattuan-agents cattuan-app
-systemctl restart caddy cattuan-sandbox cattuan-agents cattuan-app
+systemctl enable caddy cattuan-sandbox cattuan-app
+systemctl restart caddy cattuan-sandbox cattuan-app
 for _ in $(seq 30); do curl -fsS http://127.0.0.1:3210/api/health >/dev/null 2>&1 && break; sleep 1; done
 curl -fsS http://127.0.0.1:3210/api/health >/dev/null 2>&1 || { echo 'App 没起来，看日志：journalctl -u cattuan-app -n 50'; exit 1; }
 

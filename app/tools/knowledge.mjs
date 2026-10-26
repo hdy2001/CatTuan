@@ -3,7 +3,8 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { fetchPublic } from './web.mjs';
-import { withFileLock as locked, writeText as atomicText } from './common.mjs';
+import { withFileLock as locked, writeText as atomicText, nameSet as names, enabledTools } from './common.mjs';
+import { clip } from '../core/util.mjs';
 
 const DELIMITER = '\n§\n';
 const MAX_FILE = 256 * 1024;
@@ -12,7 +13,6 @@ const EXCLUDED = new Set(['node_modules', 'venv', '__pycache__', 'site-packages'
 const SUPPORT = new Set(['references', 'templates', 'assets', 'scripts']);
 const TERMINAL = /```(?:bash|sh|shell|zsh|console)|\b(?:brew|pip|npm|apt|curl|wget|python3?)\s+[\w-]/i;
 const INJECTION = /(?:ignore|disregard|override)\s+(?:all\s+)?(?:previous|prior|system|safety)\s+(?:instructions|rules|prompts)|(?:upload|send|exfiltrate|reveal)\s+(?:all\s+)?(?:secrets?|credentials?|api[ _-]?keys?|passwords?|\.env)|<\/?(?:system|developer)>/i;
-const names = value => new Set(Array.isArray(value) ? value.map(String) : typeof value === 'string' ? value.split(',').map(v => v.trim()).filter(Boolean) : []);
 const errorResult = error => ({ success: false, error: error.message || String(error) });
 const configuration = ctx => typeof ctx.config === 'function' ? ctx.config() || {} : ctx.config || {};
 const isWithin = (root, file) => file === root || file.startsWith(root + path.sep);
@@ -72,7 +72,7 @@ async function walk(root, callback, { maxFiles = 2000, maxDepth = 12 } = {}) {
   await visit(root, 0);
 }
 
-export function parseFrontmatter(input) {
+function parseFrontmatter(input) {
   const text = String(input).replace(/^\uFEFF/, '');
   const match = text.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---(?:[ \t]*\r?\n|[ \t]*$)/);
   if (!match) return { metadata: {}, body: text };
@@ -82,10 +82,10 @@ export function parseFrontmatter(input) {
   return { metadata, body: text.slice(match[0].length) };
 }
 
-export async function scanSkills(ctx, { includeDisabled = false } = {}) {
+async function scanSkills(ctx, { includeDisabled = false } = {}) {
   const root = await skillsRoot(ctx);
   const config = configuration(ctx);
-  const disabled = new Set([...names(config.skills?.disabled), ...names(config.skills?.platform_disabled?.api_server)]);
+  const disabled = names(config.skills?.disabled);
   const usage = await jsonAt(path.join(root, '.usage.json'));
   const installs = await jsonAt(path.join(root, '.cattuan_installs.json'), []);
   const installMap = new Map((Array.isArray(installs) ? installs : []).map(row => [row.name, row]));
@@ -111,7 +111,7 @@ export async function scanSkills(ctx, { includeDisabled = false } = {}) {
   return result;
 }
 
-export async function loadSkill(ctx, name, { includeDisabled = false, filePath } = {}) {
+async function loadSkill(ctx, name, { includeDisabled = false, filePath } = {}) {
   relativeName(name, '技能名');
   const skill = (await scanSkills(ctx, { includeDisabled })).find(s => s.name === name || s.local_name === name);
   if (!skill) return null;
@@ -123,7 +123,7 @@ export async function loadSkill(ctx, name, { includeDisabled = false, filePath }
   return skill;
 }
 
-export async function setSkillEnabled(ctx, name, enabled) {
+async function setSkillEnabled(ctx, name, enabled) {
   const skill = await loadSkill(ctx, name, { includeDisabled: true });
   if (!skill) throw new Error(`没有这个技能：${name}`);
   if (enabled && !skill.matchesPlatform) throw new Error('此技能不支持当前操作系统');
@@ -135,22 +135,9 @@ export async function setSkillEnabled(ctx, name, enabled) {
     if (enabled) { disabled.delete(skill.name); disabled.delete(skill.local_name); }
     else disabled.add(skill.name);
     config.skills.disabled = [...disabled].sort();
-    if (enabled && config.skills.platform_disabled?.api_server) config.skills.platform_disabled.api_server = [...names(config.skills.platform_disabled.api_server)].filter(n => n !== skill.name && n !== skill.local_name);
     await atomicText(file, stringifyYaml(config));
   });
   return { ok: true, name: skill.name, enabled };
-}
-
-export async function deleteSkill(ctx, name) {
-  const root = await skillsRoot(ctx);
-  return locked(path.join(root, '.knowledge'), async () => {
-    const skill = await loadSkill(ctx, name, { includeDisabled: true });
-    if (!skill) throw new Error(`没有这个技能：${name}`);
-    if (skill.origin === 'cattuan') throw new Error('内置技能不能删，可以停用');
-    await confined(root, skill.local_name);
-    await rm(skill.dir, { recursive: true });
-    return { ok: true, name: skill.name };
-  });
 }
 
 async function usageUpdate(ctx, name, update) {
@@ -357,9 +344,8 @@ async function visionAnalyze(ctx, args, signal) {
   } else {
     if (/^[a-z]+:\/\//i.test(source) && !source.startsWith('file://')) throw new Error('远程图片只支持公开 HTTPS 地址');
     const file = await realpath(source.startsWith('file://') ? new URL(source) : path.resolve(source));
-    const roots = [await realpath(ctx.home), path.resolve(ctx.home, '..', 'uploads')];
+    const roots = [await realpath(ctx.home)];
     if (ctx.uploadDir) roots.push(path.resolve(ctx.uploadDir));
-    if (path.resolve(ctx.home) === path.resolve(ctx.root, 'agent-home')) roots.push(path.resolve(ctx.dataDir || path.join(ctx.root, 'app/data'), 'uploads'));
     const resolvedRoots = [];
     for (const root of roots) { try { resolvedRoots.push(await realpath(root)); } catch (error) { if (error.code !== 'ENOENT') throw error; } }
     if (!resolvedRoots.some(root => isWithin(root, file))) throw new Error('只能读取此用户上传的图片或自己的文件');
@@ -467,19 +453,21 @@ async function storeTool(ctx, args, signal) {
   return { ok: true, installed: [requested], needs_terminal: false, content: content.slice(0, 12000) };
 }
 
-function spec(name, toolset, description, properties, required, execute) {
-  return { name, toolset, description, parameters: { type: 'object', properties, ...(required?.length ? { required } : {}) }, execute: async (args = {}, signal) => { try { return await execute(args, signal); } catch (error) { if (signal?.aborted) throw error; return errorResult(error); } } };
+function spec(name, toolset, { label, describe }, description, properties, required, execute) {
+  return { name, toolset, label, describe, description, parameters: { type: 'object', properties, ...(required?.length ? { required } : {}) }, execute: async (args = {}, signal) => { try { return await execute(args, signal); } catch (error) { if (signal?.aborted) throw error; return errorResult(error); } } };
 }
 const string = { type: 'string' };
 export function createKnowledgeTools(ctx) {
   return [
-    spec('memory', 'memory', '管理此用户的长期记忆或用户资料。add 增加，patch 精确替换 old_text，remove 删除匹配整条；可传 operations 原子校验批量修改。', { action: { type: 'string', enum: ['add', 'patch', 'remove', 'read'] }, target: { type: 'string', enum: ['memory', 'user'] }, content: string, old_text: string, operations: { type: 'array', items: { type: 'object', properties: { action: { type: 'string', enum: ['add', 'patch', 'remove'] }, content: string, old_text: string }, required: ['action'] } } }, [], (args, signal) => memoryTool(ctx, args, signal)),
-    spec('skills_list', 'skills', '列出此用户已经启用且支持当前平台的技能。', { category: string }, [], async args => { const skills = (await scanSkills(ctx)).filter(s => !args.category || s.category === args.category).map(({ name, description, category }) => ({ name, description, category: category || null })); return { success: true, skills, count: skills.length, categories: [...new Set(skills.map(s => s.category).filter(Boolean))].sort() }; }),
-    spec('skill_view', 'skills', '读取已启用技能的 SKILL.md 或该技能内的链接文件，执行相关任务前先加载技能。', { name: string, file_path: string }, ['name'], async args => { const skill = await loadSkill(ctx, args.name, { filePath: args.file_path }); if (!skill) throw new Error(`技能不存在、未启用或不支持当前平台：${args.name}`); await usageUpdate(ctx, skill.name, u => ({ ...u, views: (Number(u.views) || 0) + 1, uses: (Number(u.uses) || 0) + 1, last_used_at: new Date().toISOString(), last_session_id: ctx.sessionId })); return { success: true, name: skill.name, description: skill.description, content: skill.content, path: skill.local_name, linked_files: await linkedFiles(skill.dir) }; }),
-    spec('skill_manage', 'skills', '仅在此用户技能目录内创建、修改、删除技能与文本支持文件。支持 operations 批量操作，不执行脚本。', { operations: { type: 'array', items: { type: 'object', properties: { action: { type: 'string', enum: ['create', 'edit', 'patch', 'write_file', 'remove_file', 'delete'] }, name: string, category: string, content: string, file_path: string, file_content: string, old_string: string, new_string: string, replace_all: { type: 'boolean' } }, required: ['name', 'action'] } }, action: string, name: string, content: string, file_path: string, file_content: string, old_string: string, new_string: string, category: string, replace_all: { type: 'boolean' } }, [], (args, signal) => manageSkills(ctx, args, signal)),
-    spec('session_search', 'session_search', '搜索或读取此用户以前的聊天记录。有 query 时搜索，有 session_id 时读取会话，不带参数时列最近会话。', { query: string, session_id: string, limit: { type: 'integer', minimum: 1, maximum: 20 }, role_filter: { type: 'string', enum: ['user', 'assistant'] } }, [], args => sessionSearch(ctx, args)),
-    spec('vision_analyze', 'vision', '把图片作为原生图像交给当前 Pi 模型分析。支持自己的文件、上传、站点截图、公开 HTTPS 图片及 base64 data URL；region 指定重点观察区域，返回完整原图。', { image_url: string, question: string, region: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, width: { type: 'number' }, height: { type: 'number' } }, required: ['x', 'y', 'width', 'height'] } }, ['image_url'], (args, signal) => visionAnalyze(ctx, args, signal)),
-    spec('skill_store', 'skillstore', '按需寻找并安装直接服务当前任务的技能。search 搜索本地停用技能和 skills.sh；install 需要搜索结果 identifier 和 reason。安装仅下载受限文本包并检查，不执行命令。list 查看安装记录。', { action: { type: 'string', enum: ['search', 'install', 'list'] }, query: string, identifier: string, reason: string }, ['action'], (args, signal) => storeTool(ctx, args, signal)),
+    spec('memory', 'memory', { label: '翻记忆', describe: (a) => ({ act: a.action === 'add' ? `记住「${clip(a.content, 30)}」` : a.action === 'patch' ? '更新记忆' : a.action === 'remove' ? '删掉一条记忆' : a.operations ? '整理记忆' : '翻记忆', detail: clip(a.content, 160) }) }, '管理此用户的长期记忆或用户资料。add 增加，patch 精确替换 old_text，remove 删除匹配整条；可传 operations 原子校验批量修改。', { action: { type: 'string', enum: ['add', 'patch', 'remove', 'read'] }, target: { type: 'string', enum: ['memory', 'user'] }, content: string, old_text: string, operations: { type: 'array', items: { type: 'object', properties: { action: { type: 'string', enum: ['add', 'patch', 'remove'] }, content: string, old_text: string }, required: ['action'] } } }, [], (args, signal) => memoryTool(ctx, args, signal)),
+    spec('skills_list', 'skills', { label: '看技能列表', describe: () => ({ act: '看有哪些技能' }) }, '列出此用户已经启用且支持当前平台的技能。', { category: string }, [], async args => { const skills = (await scanSkills(ctx)).filter(s => !args.category || s.category === args.category).map(({ name, description, category }) => ({ name, description, category: category || null })); return { success: true, skills, count: skills.length, categories: [...new Set(skills.map(s => s.category).filter(Boolean))].sort() }; }),
+    spec('skill_view', 'skills', { label: '翻技能手册', describe: (a) => ({ act: `翻技能手册「${clip(a.name, 30)}」` }) }, '读取已启用技能的 SKILL.md 或该技能内的链接文件，执行相关任务前先加载技能。', { name: string, file_path: string }, ['name'], async args => { const skill = await loadSkill(ctx, args.name, { filePath: args.file_path }); if (!skill) throw new Error(`技能不存在、未启用或不支持当前平台：${args.name}`); await usageUpdate(ctx, skill.name, u => ({ ...u, views: (Number(u.views) || 0) + 1, uses: (Number(u.uses) || 0) + 1, last_used_at: new Date().toISOString(), last_session_id: ctx.sessionId })); return { success: true, name: skill.name, description: skill.description, content: skill.content, path: skill.local_name, linked_files: await linkedFiles(skill.dir) }; }),
+    spec('skill_manage', 'skills', { label: '整理技能' }, '仅在此用户技能目录内创建、修改、删除技能与文本支持文件。支持 operations 批量操作，不执行脚本。', { operations: { type: 'array', items: { type: 'object', properties: { action: { type: 'string', enum: ['create', 'edit', 'patch', 'write_file', 'remove_file', 'delete'] }, name: string, category: string, content: string, file_path: string, file_content: string, old_string: string, new_string: string, replace_all: { type: 'boolean' } }, required: ['name', 'action'] } }, action: string, name: string, content: string, file_path: string, file_content: string, old_string: string, new_string: string, category: string, replace_all: { type: 'boolean' } }, [], (args, signal) => manageSkills(ctx, args, signal)),
+    spec('session_search', 'session_search', { label: '翻聊天记录', describe: (a) => ({ act: a.query ? `翻聊天记录「${clip(a.query, 24)}」` : '翻聊天记录' }) }, '搜索或读取此用户以前的聊天记录。有 query 时搜索，有 session_id 时读取会话，不带参数时列最近会话。', { query: string, session_id: string, limit: { type: 'integer', minimum: 1, maximum: 20 }, role_filter: { type: 'string', enum: ['user', 'assistant'] } }, [], args => sessionSearch(ctx, args)),
+    spec('vision_analyze', 'vision', { label: '看图', describe: (a) => ({ act: '看图', detail: a.question ? `想知道：${clip(a.question, 80)}` : '' }) }, '把图片作为原生图像交给当前 Pi 模型分析。支持自己的文件、上传、站点截图、公开 HTTPS 图片及 base64 data URL；region 指定重点观察区域，返回完整原图。', { image_url: string, question: string, region: { type: 'object', properties: { x: { type: 'number' }, y: { type: 'number' }, width: { type: 'number' }, height: { type: 'number' } }, required: ['x', 'y', 'width', 'height'] } }, ['image_url'], (args, signal) => visionAnalyze(ctx, args, signal)),
+    spec('skill_store', 'skills', { label: '找技能', describe: (a) => (a.action === 'install' ? { act: `装技能「${clip(a.identifier || a.name, 30)}」`, detail: a.reason }
+      : a.action === 'search' ? { act: `找技能「${clip(a.query, 24)}」`, done: (o) => ({ title: `找技能「${clip(a.query, 24)}」，找到 ${(o.results || []).length} 个`, detail: (o.results || []).slice(0, 3).map((x) => `${x.name} · ${clip(x.description, 40)}`).join('\n') }) }
+        : { act: '看装过的技能' }) }, '按需寻找并安装直接服务当前任务的技能。search 搜索本地停用技能和 skills.sh；install 需要搜索结果 identifier 和 reason。安装仅下载受限文本包并检查，不执行命令。list 查看安装记录。', { action: { type: 'string', enum: ['search', 'install', 'list'] }, query: string, identifier: string, reason: string }, ['action'], (args, signal) => storeTool(ctx, args, signal)),
   ];
 }
 
@@ -494,9 +482,7 @@ export async function knowledgeContext(ctx) {
       if (content) blocks.push(`${target === 'user' ? 'USER PROFILE (who the user is)' : 'MEMORY (your personal notes)'}:\n${content}`);
     } catch (error) { if (!String(error.message).includes('已停用')) throw error; }
   }
-  const disabled = new Set([...names(config.agent?.disabled_tools), ...names(config.agent?.disabled_toolsets), ...names(config.tools?.api_server?.disabled)]);
-  const enabled = config.platform_toolsets?.api_server;
-  if (![...disabled].some(n => ['skills', 'skill_view'].includes(n)) && (enabled == null || names(enabled).has('skills'))) {
+  if (enabledTools(config)({ name: 'skill_view', toolset: 'skills' })) {
     const skills = await scanSkills(ctx);
     if (skills.length) blocks.push('可用技能（先用 skill_view 加载与当前任务相关的技能）：\n' + skills.map(s => `- ${s.name}: ${s.description}`).join('\n'));
   }

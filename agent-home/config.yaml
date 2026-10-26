@@ -1,14 +1,8 @@
-agent: {}
-platform_toolsets:
-  api_server:
-    - idol
-    - vision
-    - memory
-    - session_search
-    - skills
-    - skillstore
-    - deepsearch
-    - phone
+# 工具开关：toolsets 里列的工具集才启用；disabled_tools 再单独关掉某个工具（或工具集）
+#   images 搜图 · vision 看图 · memory 记忆 · session_search 翻聊天记录 · skills 技能（含技能商店）
+#   web 网页搜索、读网页、读网址 · phone 打电话（只有子 agent 用）
+toolsets: [images, vision, memory, session_search, skills, web, phone]
+disabled_tools: []
 memory:
   memory_enabled: true
   user_profile_enabled: true

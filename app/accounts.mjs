@@ -11,7 +11,6 @@ import { DatabaseSync } from 'node:sqlite';
 const scrypt = promisify(crypto.scrypt);
 const SCRYPT = { N: 16384, r: 8, p: 1, maxmem: 64 << 20 };
 const SESSION_DAYS = 30;
-export const AGENT_PORT_BASE = 8701; // 每人的 agent 从这里往上排（单用户版的 8650 留给沿用老数据的管理员）
 export const NAME_RE = /^[\p{L}\p{N}_.-]{1,20}$/u; // 登录名：中英文、数字、_ . -，最多 20 个字
 export const MIN_PASSWORD = 8;
 
@@ -48,7 +47,6 @@ export function openAccounts(dataDir) {
       status TEXT NOT NULL DEFAULT 'invited' CHECK (status IN ('invited', 'active', 'disabled')),
       password_hash TEXT,
       agent_home TEXT,
-      agent_port INTEGER UNIQUE,
       created_at TEXT NOT NULL,
       last_login_at TEXT
     );
@@ -72,7 +70,7 @@ export function openAccounts(dataDir) {
     );
   `);
   const q = (sql) => db.prepare(sql);
-  const USER_COLS = 'id, name, role, status, agent_home, agent_port, created_at, last_login_at';
+  const USER_COLS = 'id, name, role, status, agent_home, created_at, last_login_at';
 
   const api = {
     db,
@@ -81,26 +79,21 @@ export function openAccounts(dataDir) {
     listUsers: () => q(`SELECT ${USER_COLS} FROM users ORDER BY created_at`).all(),
     activeUsers: () => q(`SELECT ${USER_COLS} FROM users WHERE status != 'disabled' ORDER BY created_at`).all(),
 
-    nextAgentPort() {
-      const row = q('SELECT MAX(agent_port) AS p FROM users WHERE agent_port >= ?').get(AGENT_PORT_BASE);
-      return Math.max(AGENT_PORT_BASE, (row?.p || 0) + 1);
-    },
-
     // 建账号时就设好密码，直接是可以登录的状态（status 里的 'invited' 只剩老库里没设过密码的账号）
-    async createUser({ name, password, role = 'member', agentHome = null, agentPort }) {
+    async createUser({ name, password, role = 'member', agentHome = null }) {
       name = String(name || '').trim();
       if (!NAME_RE.test(name)) throw new Error('名字只能用中英文、数字和 _ . -，最多 20 个字');
       if (String(password || '').length < MIN_PASSWORD) throw new Error(`密码至少 ${MIN_PASSWORD} 位`);
       if (api.findUser(name)) throw new Error(`已经有叫「${name}」的账号了`);
       const hash = await hashPassword(String(password));
       const id = `u_${crypto.randomBytes(5).toString('hex')}`;
-      q(`INSERT INTO users (id, name, role, status, password_hash, agent_home, agent_port, created_at) VALUES (?, ?, ?, 'active', ?, ?, ?, ?)`)
-        .run(id, name, role, hash, agentHome, agentPort ?? api.nextAgentPort(), isoNow());
+      q(`INSERT INTO users (id, name, role, status, password_hash, agent_home, created_at) VALUES (?, ?, ?, 'active', ?, ?, ?)`)
+        .run(id, name, role, hash, agentHome, isoNow());
       return api.getUser(id);
     },
 
     update(id, fields) {
-      const keys = Object.keys(fields).filter((k) => ['role', 'status', 'agent_home', 'agent_port'].includes(k));
+      const keys = Object.keys(fields).filter((k) => ['role', 'status', 'agent_home'].includes(k));
       if (keys.length) q(`UPDATE users SET ${keys.map((k) => `${k} = ?`).join(', ')} WHERE id = ?`).run(...keys.map((k) => fields[k]), id);
       if (fields.status === 'disabled') q('DELETE FROM auth_sessions WHERE user_id = ?').run(id); // 停用立刻下线
       return api.getUser(id);
