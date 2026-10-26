@@ -13,13 +13,13 @@
 import { createDispatcherTools } from './dispatcher-tools.mjs';
 
 const TERMINAL = new Set(['run.completed', 'run.failed', 'run.cancelled']);
-const ATTACH = new Set(['subagent', 'confirm_call', 'steer_task', 'stop_task', 'ask_user', 'create_goal']); // 结果要挂在这段话上的工具
+const ATTACH = new Set(['subagent', 'steer_task', 'stop_task', 'ask_user', 'create_goal']); // 结果要挂在这段话上的工具
 const FALLBACK = '我这边网络有点卡，等下再说一次？';
 // JS 的 .slice() 可能把 emoji 切成半个；发给模型前清掉孤立代理项
 const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
 const clean = (s) => String(s ?? '').replace(LONE_SURROGATE, '');
 
-const newTurn = () => ({ userText: '', users: 0, attach: {}, search: null, did: [],
+const newTurn = () => ({ userText: '', users: 0, attach: {}, did: [],
   spoke: false, posted: false, buffer: [], waitTools: 0, deliveries: [], firstText: '' });
 
 /**
@@ -118,7 +118,7 @@ export function createDispatcher({ createRuntime, workTools = async () => ({ sys
           activity.step(turn.act, stepLabel(ev.tool, ev.args || {}));
           if (!ATTACH.has(ev.tool)) flush(u, chatId, turn);
         } else if (ev.event === 'tool.completed') {
-          if (ev.tool === 'deep_web_search') noteSearch(turn, ev);
+          if (ev.tool === 'deep_web_search') turn.did.push(`搜了「${ev.args?.query || ''}」`);
           if (--turn.waitTools <= 0) flush(u, chatId, turn);
         } else if (TERMINAL.has(ev.event)) {
           run.listeners.delete(on);
@@ -130,17 +130,6 @@ export function createDispatcher({ createRuntime, workTools = async () => ({ sys
     });
   }
 
-  // 搜过什么、前几条来源：挂在这一轮的回复下面
-  function noteSearch(turn, ev) {
-    let out;
-    try { out = JSON.parse(ev.result); } catch { return; }
-    if (!Array.isArray(out?.results)) return;
-    turn.search ||= { queries: [], sources: [] };
-    turn.search.queries.push(String(out.query || ev.args?.query || ''));
-    turn.search.sources.push(...out.results.slice(0, 5).map(({ title, url }) => ({ title, url })));
-    turn.did.push(`搜了「${out.query || ev.args?.query || ''}」`);
-  }
-
   // 把攒下的话发出去，挂上这一轮办事工具留下的东西；final：这一轮结束了，没发的任务结果也一起发（模型没提就用兜底的一句）
   function flush(u, chatId, turn, final = false) {
     const parts = turn.buffer.splice(0).flatMap((s) => s.split(/\n{2,}/)).map((s) => s.trim()).filter(Boolean).slice(0, 4);
@@ -150,11 +139,10 @@ export function createDispatcher({ createRuntime, workTools = async () => ({ sys
     if (!parts.length && pending && !ready.length) parts.push('好嘞～');
     turn.firstText ||= parts[0] || '';
     const items = [];
-    let texts = parts.map((text) => ({ text, ...(turn.search && { search: turn.search }) }));
+    let texts = parts.map((text) => ({ text }));
     if (texts.length) Object.assign(texts.at(-1), turn.attach);
     else if (pending && ready.length) Object.assign(ready[0].last, turn.attach); // 任务卡片那条带上
     turn.attach = {};
-    if (turn.search && texts.length) turn.search = null;
     // 任务结果：第一份用模型这段话，后面的（几个任务同时做完）各用自己的兜底一句
     for (const d of (texts.length || final ? ready : [])) {
       d.posted = true;

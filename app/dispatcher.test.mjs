@@ -49,7 +49,6 @@ async function setup(reply) {
   const acts = [];
   const quota = { tasks: '' };
   const hooks = {};
-  let pending = null;
   const actions = {
     tasks: () => tasks, goals: () => goals,
     createTask: (u, t) => { const task = { id: `t_${tasks.length + 1}`, uid: u.id, status: 'queued', round: 1, ...t }; hooks.createTask?.(u, task); tasks.push(task); return task; },
@@ -58,7 +57,6 @@ async function setup(reply) {
     overQuota: (_u, kind) => quota[kind] || '',
     goalLimit: () => '',
     normAsk: (a) => (a?.questions?.length ? { type: 'ask', questions: a.questions } : null),
-    pendingCall: () => pending, setPendingCall: (_u, v) => { pending = v; },
     createGoal: (u, g) => { const goal = { id: `g_${goals.length + 1}`, ...g }; goals.push(goal); return goal; },
     setGoalDone: (g) => { g.done = true; },
     taskResult: (t) => t.result || '（无）',
@@ -84,7 +82,7 @@ async function setup(reply) {
     log: () => {},
   });
   const ended = (n = 1) => until(() => acts.filter((a) => a.status).length >= n);
-  return { dir, url, requests, tasks, goals, posted, acts, quota, hooks, dispatcher, ended, getPending: () => pending,
+  return { dir, url, requests, tasks, goals, posted, acts, quota, hooks, dispatcher, ended,
     async close() { await dispatcher.close(); provider.close(); await rm(dir, { recursive: true, force: true }); } };
 }
 const U1 = { id: 'u1' };
@@ -136,9 +134,9 @@ test('the main agent searches by itself, answers directly and records what was s
     assert.equal(s.requests.length, 2);
     assert.match(textOf(s.requests[1].messages.at(-1)), /蓝果中古首饰 官网/);
     assert.deepEqual(s.posted.map((m) => m.text), ['我查查～', '蓝果中古营业到晚上 10 点。']);
-    assert.deepEqual(s.posted[1].search.queries, ['蓝果中古首饰']);
-    assert.deepEqual(s.posted[1].search.sources, [{ title: '蓝果中古首饰 官网', url: 'https://example.com/a' }]);
+    assert.ok(s.posted.every((m) => !('search' in m)));
     assert.ok(s.acts[0].steps.includes('deep_web_search'));
+    assert.match(s.acts[0].outcome, /搜了「蓝果中古首饰」/);
     assert.equal(s.tasks.length, 0, 'no subagent for a one-step lookup');
   } finally { await s.close(); }
 });
@@ -170,7 +168,7 @@ test('the main agent gets work tools and chat tools but cannot place calls itsel
     await s.dispatcher.userMessage(U1, 'c1', { text: '在吗' });
     await s.ended();
     const names = s.requests[0].tools.map((t) => t.function.name);
-    for (const name of ['deep_web_search', 'subagent', 'ask_user', 'propose_call', 'create_goal']) assert.ok(names.includes(name), name);
+    for (const name of ['deep_web_search', 'subagent', 'ask_user', 'create_goal']) assert.ok(names.includes(name), name);
     for (const name of ['phone_call', 'web_search', 'create_task']) assert.ok(!names.includes(name), name);
   } finally { await s.close(); }
 });

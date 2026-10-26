@@ -72,7 +72,7 @@ async function walk(root, callback, { maxFiles = 2000, maxDepth = 12 } = {}) {
   await visit(root, 0);
 }
 
-export function parseFrontmatter(input) {
+function parseFrontmatter(input) {
   const text = String(input).replace(/^\uFEFF/, '');
   const match = text.match(/^---[ \t]*\r?\n([\s\S]*?)\r?\n---(?:[ \t]*\r?\n|[ \t]*$)/);
   if (!match) return { metadata: {}, body: text };
@@ -82,7 +82,7 @@ export function parseFrontmatter(input) {
   return { metadata, body: text.slice(match[0].length) };
 }
 
-export async function scanSkills(ctx, { includeDisabled = false } = {}) {
+async function scanSkills(ctx, { includeDisabled = false } = {}) {
   const root = await skillsRoot(ctx);
   const config = configuration(ctx);
   const disabled = new Set([...names(config.skills?.disabled), ...names(config.skills?.platform_disabled?.api_server)]);
@@ -111,7 +111,7 @@ export async function scanSkills(ctx, { includeDisabled = false } = {}) {
   return result;
 }
 
-export async function loadSkill(ctx, name, { includeDisabled = false, filePath } = {}) {
+async function loadSkill(ctx, name, { includeDisabled = false, filePath } = {}) {
   relativeName(name, '技能名');
   const skill = (await scanSkills(ctx, { includeDisabled })).find(s => s.name === name || s.local_name === name);
   if (!skill) return null;
@@ -123,7 +123,7 @@ export async function loadSkill(ctx, name, { includeDisabled = false, filePath }
   return skill;
 }
 
-export async function setSkillEnabled(ctx, name, enabled) {
+async function setSkillEnabled(ctx, name, enabled) {
   const skill = await loadSkill(ctx, name, { includeDisabled: true });
   if (!skill) throw new Error(`没有这个技能：${name}`);
   if (enabled && !skill.matchesPlatform) throw new Error('此技能不支持当前操作系统');
@@ -139,18 +139,6 @@ export async function setSkillEnabled(ctx, name, enabled) {
     await atomicText(file, stringifyYaml(config));
   });
   return { ok: true, name: skill.name, enabled };
-}
-
-export async function deleteSkill(ctx, name) {
-  const root = await skillsRoot(ctx);
-  return locked(path.join(root, '.knowledge'), async () => {
-    const skill = await loadSkill(ctx, name, { includeDisabled: true });
-    if (!skill) throw new Error(`没有这个技能：${name}`);
-    if (skill.origin === 'cattuan') throw new Error('内置技能不能删，可以停用');
-    await confined(root, skill.local_name);
-    await rm(skill.dir, { recursive: true });
-    return { ok: true, name: skill.name };
-  });
 }
 
 async function usageUpdate(ctx, name, update) {

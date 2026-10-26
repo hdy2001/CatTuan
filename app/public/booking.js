@@ -34,8 +34,8 @@ export function bookingHtml(b) {
 // 聊天里每通电话打完挂一个通话组件（通话 · 哪家 · 几点 · 查看详情）；侧边栏「喵团档案 → 电话」里是全部通话记录，点开看详情和转写。
 // 记录：{ id, who, short, phone, agent, at, seconds, status, summary, lines }。status：done 接通了 / missed 打出去没接通 / blocked 平台拦下没打出去
 // （演示脚本里没接通是 noanswer）。点击只带 data-call / data-open-calls，由 App（或演示脚本）接管。
-export const CALL_LINE = '美团专线'; // 拨出线路：外显号码不固定，界面上不显示号码
-export const PHONE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 3.5h2.6l1.4 4.1-1.9 1.3a11.5 11.5 0 0 0 6.4 6.4l1.3-1.9 4.1 1.4v2.6a2 2 0 0 1-2.2 2A16.5 16.5 0 0 1 4.6 5.7a2 2 0 0 1 2-2.2z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
+const CALL_LINE = '美团专线'; // 拨出线路：外显号码不固定，界面上不显示号码
+const PHONE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 3.5h2.6l1.4 4.1-1.9 1.3a11.5 11.5 0 0 0 6.4 6.4l1.3-1.9 4.1 1.4v2.6a2 2 0 0 1-2.2 2A16.5 16.5 0 0 1 4.6 5.7a2 2 0 0 1 2-2.2z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
 const CHEVRON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const clock = (iso) => new Date(iso).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
 const outcome = (c) => (c.status === 'done' ? `通话 ${Math.floor(c.seconds / 60)}:${String(c.seconds % 60).padStart(2, '0')}`
@@ -49,7 +49,7 @@ function callCardHtml(c) {
 }
 
 // 「电话」页：喵团用的线路（不显示号码，写「美团专线」），下面是通话记录（新的在上）
-export function callLogHtml(line, calls) {
+function callLogHtml(line, calls) {
   const rows = [...calls].reverse().map((c) => `<li><button type="button" data-call="${esc(c.id)}">
       <span class="bk-callicon${c.status !== 'done' ? ' miss' : ''}">${PHONE_ICON}</span>
       <span class="bk-callmain"><b>${esc(c.short)}</b><small>${clock(c.at)} · ${outcome(c)}</small></span>${CHEVRON}</button></li>`).join('');
@@ -59,7 +59,7 @@ export function callLogHtml(line, calls) {
 }
 
 // 一通电话的详情：打给谁、什么时候、结果，喵团的小结，挂断后给的转写
-export function callDetailHtml(c, line) {
+function callDetailHtml(c, line) {
   const fact = (k, v) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`;
   return `<div class="bk-calldetail">
     <div class="bk-calltop"><b>${esc(c.who)}</b><small>${esc(c.phone)}</small></div>

@@ -76,9 +76,6 @@ function loadUser(row) {
   const dir = userDir(row.id);
   fs.mkdirSync(path.join(dir, 'uploads'), { recursive: true });
   const state = { messages: [], tasks: [], goals: [], chats: [], ...readJson(path.join(dir, 'state.json'), {}) };
-  delete state.feed; // 「动态」已由目标取代
-  delete state.activity; // 「喵团动态」已删掉，以前存下的记录不要了
-  delete state.location; // 位置功能已删掉
   state.goals = state.goals.filter((g) => g.kind !== 'ledger'); // 记账已删掉：AI 维护的「记账管家」目标不要了
   for (const m of state.messages) delete m.sites; // 网站已删掉：消息上挂的网站卡片不要了
   for (const t of state.tasks) if (t.result) delete t.result.sites;
@@ -135,7 +132,6 @@ function writeState(u) {
     messages: s.chats.flatMap((c) => s.messages.filter((m) => m.chatId === c.id).slice(-300)),
     chats: s.chats, currentChat: s.currentChat, stats: s.stats,
     tasks: s.tasks.slice(-80), goals: s.goals,
-    pendingCall: s.pendingCall, // 待确认的电话：App 重启后用户回「打吧」还认得
   }));
   fs.renameSync(`${file}.tmp`, file);
 }
@@ -285,7 +281,7 @@ function parseJsonLoose(raw) {
 
 // 主 agent（聊天里的喵团，dispatcher.mjs）的人设和规则。工具：pi-tools.mjs 干活的那套（不含打电话）+ dispatcher-tools.mjs。
 const CHAT_SYSTEM = `你是「喵团」，用户的私人助理和朋友，在聊天里像朋友发微信一样说话。你自己能干活（搜网页、读网页、搜图、看图、查天气等实用信息、记住用户偏好、翻以前的聊天），复杂的事派子 agent 去做。
-每条输入开头的【现在】【目标】【待确认的电话】【后台任务】是 App 给你的最新状态，【用户】是用户刚说的话，【后台任务结果】是你派的子 agent 做完了。
+每条输入开头的【现在】【目标】【后台任务】是 App 给你的最新状态，【用户】是用户刚说的话，【后台任务结果】是你派的子 agent 做完了。
 
 说话：
 - 回复要短：通常 1 句，最多 2 句；口语化，可以带语气词或颜文字；不用列表、不用 markdown，不解释你怎么做，不提工具名、id、子 agent。
@@ -316,8 +312,8 @@ const CHAT_SYSTEM = `你是「喵团」，用户的私人助理和朋友，在�
   · 打电话的事整个交给子 agent：找店、找电话、打电话都是它做，你不用先自己搜，只管把要办的事问清楚、派出去。
   · 先分清只问还是要约：只问不约（问有没有位、多少钱、几点关门）不报用户信息、不答应任何事；要约会报预约人、会替用户答应。替用户给家人朋友传话、送祝福也算只问不约，说了带什么话就直接派，不用问时间、称呼。
   · 缺信息先问，不派：用 ask_user 出提问卡，一次问清缺的几项，同时一句话说还差什么。必填：日期、时间、只问还是直接约；要约还要人数；美甲、美睫、美发、按摩、SPA 要项目；球场要时长和场地。用户说过的不再问；店还没定、电话没找到不算缺（子 agent 会去搜）。
-  · 只问不约：信息齐了直接 subagent，call 写 ask；回复开头带 📞，比如「📞 好，我打给悦榕轩问问，大概 1–5 分钟」，不用报对方号码。📞 和「我这就打」只在这一轮真派出去了（调了 subagent / confirm_call）时说；还要先问用户的，就只问，不说要打。
-  · 要约：信息齐了先 propose_call，一句话说清打给谁、约什么、碰到什么先回来问，最后问「现在打吗？」。【待确认的电话】里有、用户回「打吧」「好」「可以」时 confirm_call，回复开头带 📞；用户要改就重新 propose_call；用户说不约了就 cancel_call。
+  · 信息齐了直接 subagent，task 里写明只问还是可以直接约（用户选了直接约就写「用户已确认，可以直接约」）；回复开头带 📞，比如「📞 好，我打给悦榕轩问问，大概 1–5 分钟」，不用报对方号码。📞 和「我这就打」只在这一轮真派出去了（调了 subagent）时说；还要先问用户的，就只问，不说要打。
+  · 电话那边碰到用户没授权的条件（只能约别的时间、要定金、要本人通话）不会答应，会作为结果回来：你转告用户、问怎么办；用户拍了板，用 steer_task 交给原来那个任务接着打。
   · 打完以后用户问结果：照通话结果直接答，不要再派子 agent 重打——每个号码每天最多打 2 次，没打通的 App 会自动重拨。用户明确要再打一次才派。
   · task 写清：打给谁（聊天里有的写「刚才那家」）、要办的事、日期时间人数项目、要问清的事（价格、付款方式）、碰到哪些情况不答应先回来问（只能约别的时间、要定金、要本人通话）。要问几家就写清问几家、每家问什么。
 
@@ -394,13 +390,9 @@ function chatContext(u, chatId) {
     + (m.goalId && m.taskId ? '（来自目标）' : '') + (m.report ? `（附了${m.report.kind === 'result' ? '结果卡片' : '研究报告'}：${m.report.title}，任务 ${m.taskId || m.partOf}）` : '');
   if (chat) { chat.syncedAt = isoNow(); save(u); }
   return `【现在】${nowText()}\n【目标】\n${goals || '（无）'}`
-    + (pendingCall(u) ? `\n【待确认的电话】${pendingCall(u).title}：${pendingCall(u).brief}` : '')
     + `\n【后台任务】\n${tasks || '（无）'}`
     + (fresh.length ? `\n【${since ? '聊天里新增的消息（不是你说的）' : '之前的聊天'}】\n${fresh.map(line).join('\n')}` : '');
 }
-
-// 要约的电话：调度者先写 call_confirm 问用户「现在打吗」，存成待确认的电话（2 小时内有效）；用户点头（call_go）才派任务
-const pendingCall = (u) => (u.state.pendingCall && Date.now() - Date.parse(u.state.pendingCall.at) < 2 * 3600_000 ? u.state.pendingCall : null);
 
 // 提问选项卡（仿 Claude Code 的 AskUserQuestion）：调度者缺信息时自己决定出不出；最多 4 题，每题 2–4 个选项。
 // 存在那条回复消息的 booking 上，App 画成选项卡；用户选完替他把答案发出去，或者直接打字回。
@@ -431,7 +423,7 @@ const CHAT_AGENT_DIR = (u) => path.join(u.dir, 'pi-chat');
 const CHAT_TOOL_STEP = {
   deep_web_search: (a) => `上网搜「${String(a.query || '').slice(0, 20)}」`, subagent: (a) => `派子 agent「${String(a.title || '').slice(0, 12)}」`,
   steer_task: () => '改任务', stop_task: () => '停任务', read_task_result: () => '翻任务结果', ask_user: () => '出提问卡',
-  propose_call: () => '准备打电话', confirm_call: () => '安排打电话', cancel_call: () => '取消电话', create_goal: (a) => `新建目标「${String(a.title || '').slice(0, 12)}」`,
+  create_goal: (a) => `新建目标「${String(a.title || '').slice(0, 12)}」`,
   complete_goals: () => '完成目标',
 };
 
@@ -464,10 +456,9 @@ const dispatcher = createDispatcher({
   workTools: createPiTools, // 主 agent 干活的工具：和子 agent 同一套（按这个人的工具开关），dispatcher 去掉打电话
   actions: {
     tasks: (u) => u.state.tasks, goals: (u) => u.state.goals,
-    createTask, steerTask, stopTask, overQuota, goalLimit, normAsk, pendingCall,
+    createTask, steerTask, stopTask, overQuota, goalLimit, normAsk,
     createGoal: (u, g) => createGoal(u, g),
     setGoalDone: (g) => setGoalDone(g, true, '你在聊天里说不用再盯了'),
-    setPendingCall: (u, v) => { if (v) u.state.pendingCall = { ...v, at: isoNow() }; else delete u.state.pendingCall; save(u); },
     taskResult: taskResultText,
   },
   context: chatContext,
@@ -578,11 +569,9 @@ function onToolEvent(t, event, pool) {
     now: isoNow,
   });
   if (!recorded) return;
-  if (recorded.created) trackResearch(t, { name: event.tool, arguments: JSON.stringify(event.args || {}), call_id: event.tool_call_id });
   if (event.event === 'tool.completed') {
     const seen = new Set(pool.map((photo) => photo.id));
     for (const photo of photosFromToolOutput(event.result)) if (!seen.has(photo.id)) { pool.push(photo); seen.add(photo.id); }
-    trackResearchResult(t, { call_id: event.tool_call_id, output: event.result });
   }
   updateTask(t, {});
 }
@@ -672,13 +661,12 @@ function updateTask(t, patch) {
   broadcast(u, { type: 'task', task: t });
 }
 
-// callMode：这个任务里能打什么电话——ask 只问不约，book 要约（用户点过头的）；没有就只能只问不约（calls.mjs 拨号时查）
 // category：主 agent 按用户的话分的类（任务列表的图标），没给时 App 按关键词猜；query：用户的原话，任务详情的轨迹里显示
 // forkChat：主 agent 派的子 agent——派出的这一刻把那个聊天的主 agent 会话复制成子 agent 的会话（gateway 的 task-<id>），
 // 子 agent 接着这段对话做事（看得到前面聊的、查到的、用户发的图）。复制不成（聊天还没有会话）就只凭 brief 做。
 const CATEGORIES = new Set(['life', 'work', 'coding', 'social']);
-function createTask(u, { title, brief, kind = 'chat', images = [], goalId, chatId, callMode, category, query, forkChat }) {
-  const t = { id: newId('t'), uid: u.id, title: String(title).slice(0, 20), brief, kind, goalId, chatId, images, ...(callMode && { callMode }),
+function createTask(u, { title, brief, kind = 'chat', images = [], goalId, chatId, category, query, forkChat }) {
+  const t = { id: newId('t'), uid: u.id, title: String(title).slice(0, 20), brief, kind, goalId, chatId, images,
     ...(CATEGORIES.has(category) && { category }), ...(query && { query: String(query).slice(0, 300) }),
     status: 'queued', steps: [], createdAt: new Date().toISOString() };
   if (forkChat) {
@@ -710,31 +698,7 @@ function overQuota(u, kind) {
   return n >= limit ? `今天的额度用完啦（每天 ${limit} ${what}），明天再来～` : '';
 }
 
-// ---------- 深度搜索：记录搜了什么、读了哪些网页，任务卡片里显示「搜索过程」 ----------
-function parseArgs(raw) { try { return JSON.parse(raw || '{}'); } catch { return {}; } }
-function toolOutputJson(output) {
-  const raw = Array.isArray(output) ? output.map((p) => p?.text || '').join('') : String(output ?? '');
-  try { return JSON.parse(raw); } catch { return {}; }
-}
-
-function trackResearch(t, item) {
-  const args = parseArgs(item.arguments);
-  if (item.name !== 'deep_web_search' && item.name !== 'read_webpage') return;
-  t.research ||= { searches: [], reads: [] };
-  if (item.name === 'deep_web_search') t.research.searches.push({ id: item.call_id, q: String(args.query || '').slice(0, 80), at: new Date().toISOString() });
-  else t.research.reads.push({ id: item.call_id, url: String(args.url || '').slice(0, 300), at: new Date().toISOString() });
-}
-
-function trackResearchResult(t, item) {
-  const r = t.research;
-  if (!r) return;
-  const out = toolOutputJson(item.output);
-  const s = r.searches.find((x) => x.id === item.call_id);
-  if (s) s.n = out.results?.length ?? 0;
-  const p = r.reads.find((x) => x.id === item.call_id);
-  if (p) Object.assign(p, { title: String(out.title || '').slice(0, 80), ok: !out.error && !out.note && !!out.text, note: out.error || out.note || '' });
-}
-
+// ---------- 深度搜索：研究报告和结果卡片 ----------
 // 报告：正文 + 末尾的「SOURCES:」列表 → { body, sources: [{ n, title, url }] }
 function parseReport(text) {
   const raw = String(text || '');
@@ -799,11 +763,11 @@ function setRevisions(t, from, patch) {
 }
 
 // 每一轮的结局：done 完成 · failed 失败 · stopped 停了 · revised 插话没赶上、接着改下一轮
-// 带上这一轮的步骤和派出去的子 agent（任务详情里执行 agent 每一轮一段 SUBAGENT 轨迹，每个子 agent 再各一段；下一轮开始时清空）
+// 带上这一轮的步骤（任务详情里执行 agent 每一轮一段 SUBAGENT 轨迹；下一轮开始时清空）
 function endRound(t, status, error) {
   const steps = (t.steps || []).map(({ id, label, ...s }) => s);
   t.history = [...(t.history || []), { round: t.round || 1, status, startedAt: t.startedAt, endedAt: isoNow(), steps,
-    ...(t.agents?.length && { agents: t.agents }), ...(error && { error: clip(error, 300) }) }];
+    ...(error && { error: clip(error, 300) }) }];
 }
 
 // 喵团（调度者）这一轮最后跟用户说了什么：任务详情 MAIN 轨迹的最后一步、任务列表上的「最新动态」
@@ -820,7 +784,7 @@ async function runTask(t) {
   if (!reattach) {
     t.sessionId ||= `task-${t.id}`;
     t.round ||= 1;
-    updateTask(t, { status: 'running', startedAt: isoNow(), runId: undefined, lastSeq: -1, stopRequested: false, agents: undefined });
+    updateTask(t, { status: 'running', startedAt: isoNow(), runId: undefined, lastSeq: -1, stopRequested: false });
   }
   let r;
   // 接回的这一轮：说明是按当前状态重新拼的，和当初发出去的可能略有出入
@@ -831,9 +795,8 @@ async function runTask(t) {
     r = { error: e.message };
   }
   t.steps.forEach((s) => { if (s.status === 'running') Object.assign(s, { status: 'done', cut: true }); }); // 这一轮结束时还没做完的步骤
-  t.agents?.forEach((a) => { if (a.status === 'running') Object.assign(a, { status: 'cut', endedAt: isoNow() }); });
   if (r.lost) { // agent 重启过，这一轮没了：重新排队
-    updateTask(t, { status: 'queued', runId: undefined, steps: [], agents: undefined });
+    updateTask(t, { status: 'queued', runId: undefined, steps: [] });
   } else if (r.stopped || t.stopRequested) {
     endRound(t, 'stopped');
     setRevisions(t, ['sent', 'pending'], { state: 'dropped' });
@@ -851,7 +814,7 @@ async function runTask(t) {
       endRound(t, 'revised');
       const round = t.round + 1;
       late.forEach((v) => Object.assign(v, { state: 'round', round }));
-      updateTask(t, { status: 'queued', runId: undefined, result, round, asks: late.map((v) => v.text), steps: [], agents: undefined });
+      updateTask(t, { status: 'queued', runId: undefined, result, round, asks: late.map((v) => v.text), steps: [] });
     } else {
       endRound(t, 'done');
       if (t.kind !== 'goal') U(t).state.stats.tasksDone++;
@@ -961,7 +924,7 @@ function scheduleRedial(u, t, req, r) {
     const at = new Date(Date.now() + REDIAL_MINUTES * 60_000);
     if (at.getHours() < 8 || at.getHours() >= 20) return null; // 到点已经不在外呼时间里：今天不排
     g = createGoal(u, { title: '重拨', brief: '', schedule: { once: at.toISOString() }, kind: 'redial', createdBy: 'ai', source: 'ai', runNow: false,
-      extra: { fromTask: t.id, chatId: t.chatId, callMode: t.callMode, calls: [item] } });
+      extra: { fromTask: t.id, chatId: t.chatId, calls: [item] } });
   }
   const when = hhmm(g.schedule.once);
   g.title = `重拨 · ${g.calls[0].who}${g.calls.length > 1 ? `等 ${g.calls.length} 家` : ''}`.slice(0, 20);
@@ -1135,8 +1098,8 @@ function runGoal(g) {
     return null;
   }
   if (!redial) accounts.bumpUsage(u.id, 'goalChecks');
-  // 重拨的结果回到当初打电话的那个聊天；要约的电话沿用当初用户点过的头（callMode）
-  const task = createTask(u, redial ? { title: g.title, brief: redialBrief(g), kind: 'goal', goalId: g.id, chatId: g.chatId, callMode: g.callMode }
+  // 重拨的结果回到当初打电话的那个聊天
+  const task = createTask(u, redial ? { title: g.title, brief: redialBrief(g), kind: 'goal', goalId: g.id, chatId: g.chatId }
     : { title: `目标：${g.title}`, brief: goalBrief(g), kind: 'goal', goalId: g.id });
   g.lastRunAt = isoNow();
   g.status = { ...g.status, checking: true };
@@ -1464,7 +1427,7 @@ async function authRoute(req, res, url) {
 }
 
 // 不用登录就能拿的：登录页和它用到的样式、图标（App 页面本身和所有接口都要登录）
-const PUBLIC_FILES = new Set(['/style.css', '/longcat-icon.svg', '/longcat-logo.svg', '/icon.svg', '/manifest.webmanifest']);
+const PUBLIC_FILES = new Set(['/style.css', '/longcat-icon.svg', '/manifest.webmanifest']);
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);

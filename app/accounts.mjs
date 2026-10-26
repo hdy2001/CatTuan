@@ -11,7 +11,7 @@ import { DatabaseSync } from 'node:sqlite';
 const scrypt = promisify(crypto.scrypt);
 const SCRYPT = { N: 16384, r: 8, p: 1, maxmem: 64 << 20 };
 const SESSION_DAYS = 30;
-export const AGENT_PORT_BASE = 8701; // 每人的 agent 从这里往上排（单用户版的 8650 留给沿用老数据的管理员）
+const AGENT_PORT_BASE = 8701; // 每人的 agent 从这里往上排（单用户版的 8650 留给沿用老数据的管理员）
 export const NAME_RE = /^[\p{L}\p{N}_.-]{1,20}$/u; // 登录名：中英文、数字、_ . -，最多 20 个字
 export const MIN_PASSWORD = 8;
 

@@ -348,7 +348,7 @@ const BADGES = {
   goal: '<svg viewBox="0 0 24 24"><path d="M12 6.4V12l3.6 2.4" fill="none" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/></svg>',
   call: '<svg viewBox="0 0 24 24"><path d="M7.4 4h2.4l1.3 3.6-1.7 1.2a10 10 0 0 0 5.8 5.8l1.2-1.7 3.6 1.3v2.4a1.8 1.8 0 0 1-2 1.8A15 15 0 0 1 5.6 6a1.8 1.8 0 0 1 1.8-2z" fill="currentColor"/></svg>',
 };
-const taskKind = (t) => (isRedial(t) || t.kind === 'call' || t.callMode || t.call ? 'call' : t.kind === 'goal' ? 'goal' : t.kind === 'research' ? 'research' : 'chat');
+const taskKind = (t) => (isRedial(t) || t.kind === 'call' || t.call ? 'call' : t.kind === 'goal' ? 'goal' : t.kind === 'research' ? 'research' : 'chat');
 const KIND_NAME = { call: '打电话', goal: '目标检查', research: '深度搜索', chat: '对话任务' };
 const kindName = (t) => (isRedial(t) ? '自动重拨' : KIND_NAME[taskKind(t)]);
 
@@ -503,12 +503,10 @@ function saidTitle(t, h) {
   return (t.history || []).filter((x) => x.said).length > 1 ? `把第 ${h.round} 轮的结果告诉你` : '把结果告诉你';
 }
 
-// SUBAGENT：执行 agent 的每一轮（第一次做、重试、按修改再做）各一段，历史记录中的子任务跟在后面、每个一段；
-// 这一轮的步骤和子 agent 服务端在一轮结束时存进 history
+// SUBAGENT：执行 agent 的每一轮（第一次做、重试、按修改再做）各一段；这一轮的步骤服务端在一轮结束时存进 history
 function taskRounds(t) {
-  const hist = t.history || [];
-  const rounds = hist.map((h, i) => ({ ...h, steps: h.steps || (i === hist.length - 1 && !isActive(t) ? t.steps || [] : null) }));
-  if (isActive(t)) rounds.push({ round: t.round || 1, status: t.status, startedAt: t.startedAt, steps: t.steps || [], agents: t.status === 'running' ? t.agents : undefined, current: true });
+  const rounds = (t.history || []).map((h) => ({ ...h, steps: h.steps || [] }));
+  if (isActive(t)) rounds.push({ round: t.round || 1, status: t.status, startedAt: t.startedAt, steps: t.steps || [], current: true });
   else if (!rounds.length && t.steps?.length) rounds.push({ round: t.round || 1, status: t.status, startedAt: t.startedAt, endedAt: t.endedAt, steps: t.steps });
   return rounds;
 }
@@ -532,83 +530,17 @@ const SANDBOX_TOOLS = new Set(['deep_web_search', 'read_webpage']);
 const stepItem = (s) => ({ title: stepTitle(s), detail: s.detail || '', name: s.name, at: s.at, end: s.endedAt,
   state: s.status === 'running' ? 'running' : s.cut ? 'cut' : s.ok === false ? 'warn' : 'done' });
 
-// 一轮的几段：执行 agent 一段，它派出去的每个子 agent 各一段（编号接着往下排）。浏览器画面跨这几段一起挂（子 agent 可能同时在等浏览器）
-function roundSections(t, r, i, rounds, no) {
-  const last = i === rounds.length - 1;
-  const kids = r.steps ? r.agents || [] : [];
-  const execNo = no();
-  const nos = new Map(kids.map((a) => [a.id, no()]));
-  const kidNo = (a) => nos.get(a.id);
-  const exec = roundItems(t, r, kidNo);
-  // 子 agent 那段第一行是它接到的任务（执行 agent 写的目标常常带一长串要查的点和搜索词，标题只放第一句，全文点开看）
-  const lists = kids.map((a) => [...(a.goal ? [{ title: '接到执行 agent 派的任务', detail: a.goal, at: a.startedAt, state: 'done' }] : []),
-    ...r.steps.filter((s) => s.agent === a.id).map(stepItem)]);
-  if (exec) {
-    attachBrowser(t, [exec, ...lists], r);
-    const live = r.current && t.status === 'running' && t.browser?.active;
-    if (live && ![exec, ...lists].some((l) => l.some((x) => x.live))) exec.push({ title: t.browser.actions?.at(-1)?.text || '在用浏览器', state: 'running', live: true });
-    if (r.current && t.status === 'queued') exec.push({ title: '排队中，等着开始', state: 'wait' });
-    // 两次调工具之间是模型在想：不然看上去步骤全打了勾、却还在跑
-    else if (r.current && !exec.some((x) => x.state === 'running')) exec.push({ title: exec.length ? '在想下一步' : '在想怎么做', state: 'running' });
-    if (!r.current) exec.push(roundEnd(t, r, last));
-    kids.forEach((a, k) => lists[k].push(...agentEnd(t, r, a, lists[k])));
-  }
-  return [
-    ...sectionBlocks(t, `sub${i}`, execNo, roundLabel(t, r, i, rounds), exec),
-    ...kids.flatMap((a, k) => sectionBlocks(t, `sub${i}:${a.id}`, kidNo(a), agentLabel(t, r, a), lists[k], goalTitle(a.goal) || '子任务')),
-  ];
-}
-
-// 执行 agent 自己的步骤（子 agent 的在它们自己那段），派子 agent 的那步拆成每个子 agent 一行
-function roundItems(t, r, kidNo) {
-  if (!r.steps) return null; // 早期的任务只记了最后一轮
-  return r.steps.some((s) => s.at)
-    ? r.steps.filter((s) => !s.agent).flatMap((s) => (s.agents?.length ? delegateItems(s, r.agents || [], kidNo) : [stepItem(s)]))
-    : legacySteps(t, r);
-}
-
-// 执行 agent 派子 agent 的那一步（仿 Muse 的「Launched subagent to …」）：每个子 agent 一行，再一行说在等它们还是都做完了
-const agentRunning = (t, r, a) => a.status === 'running' && r.current && t.status === 'running';
-const AGENT_DONE = { completed: '做完了', interrupted: '停下了', cut: '没做完' };
-function delegateItems(s, kids, kidNo) {
-  const mine = kids.filter((a) => s.agents?.includes(a.id));
-  if (!mine.length) return [stepItem(s)];
-  const left = mine.filter((a) => a.status === 'running').length;
-  return [
-    ...mine.map((a) => ({ title: launchTitle(goalTitle(a.goal)), detail: `${kidNo(a)} · ${a.status === 'running' ? '进行中' : AGENT_DONE[a.status] || '没做成'}`, at: a.startedAt, state: 'done' })),
-    s.status === 'running'
-      ? { title: mine.length > 1 ? `等 ${mine.length} 个子 agent 做完，还剩 ${left} 个` : '等子 agent 做完', state: 'running', at: s.at }
-      : stepItem(s),
-  ];
-}
-// 目标的第一句，最多 60 字
-function goalTitle(goal) {
-  const g = String(goal || '').trim().split('\n')[0].split('。')[0].replace(/[：:，,\s]+$/, '');
-  return g.length > 60 ? `${g.slice(0, 60)}…` : g;
-}
-function launchTitle(goal) {
-  const g = String(goal || '').replace(/\s+/g, ' ').trim();
-  if (!g) return '派了个子 agent';
-  return `派子 agent ${/^[\u4e00-\u9fff]/.test(g) ? '去' : '：'}${g.length > 32 ? `${g.slice(0, 32)}…` : g}`;
-}
-
-// 子 agent 那段的最后一行：在跑就是在想下一步，做完了附上它交回的结果摘要
-function agentEnd(t, r, a, items) {
-  if (agentRunning(t, r, a)) return items.some((x) => x.state === 'running') ? [] : [{ title: items.length ? '在想下一步' : '在想怎么做', state: 'running' }];
-  if (a.status === 'completed') return [{ title: '做完了，把结果交回执行 agent', detail: a.summary || '', state: 'done' }];
-  if (['interrupted', 'cut', 'running'].includes(a.status)) return [{ title: '停下了，没做完', detail: a.summary || '', state: 'cut' }];
-  return [{ title: '出错了，没做完', detail: a.summary || '', state: 'fail' }];
-}
-
-function agentLabel(t, r, a) {
-  const parts = ['子 agent'];
-  if (agentRunning(t, r, a)) parts.push('进行中');
-  else {
-    parts.push(a.status === 'completed' ? '完成' : ['interrupted', 'cut', 'running'].includes(a.status) ? '已停止' : '失败');
-    const secs = a.secs ?? (a.startedAt && a.endedAt ? Math.max(0, Math.round((Date.parse(a.endedAt) - Date.parse(a.startedAt)) / 1000)) : null);
-    if (secs != null) parts.push(`用时 ${fmtSecs(secs)}`);
-  }
-  return parts.join(' · ');
+// 一轮一段：执行 agent 调的每个工具一步，用浏览器的那步挂上浏览器画面
+function roundSections(t, r, i, rounds) {
+  const items = r.steps.map(stepItem);
+  attachBrowser(t, items, r);
+  const live = r.current && t.status === 'running' && t.browser?.active;
+  if (live && !items.some((x) => x.live)) items.push({ title: t.browser.actions?.at(-1)?.text || '在用浏览器', state: 'running', live: true });
+  if (r.current && t.status === 'queued') items.push({ title: '排队中，等着开始', state: 'wait' });
+  // 两次调工具之间是模型在想：不然看上去步骤全打了勾、却还在跑
+  else if (r.current && !items.some((x) => x.state === 'running')) items.push({ title: items.length ? '在想下一步' : '在想怎么做', state: 'running' });
+  if (!r.current) items.push(roundEnd(t, r, i === rounds.length - 1));
+  return sectionBlocks(t, `sub${i}`, `SUBAGENT ${String(i + 1).padStart(2, '0')}`, roundLabel(t, r, i, rounds), items);
 }
 
 function roundEnd(t, r, last) {
@@ -618,33 +550,12 @@ function roundEnd(t, r, last) {
   return { title: '做完了，把结果交给喵团', detail: last ? firstLine(t.result?.text) : '', state: 'done' };
 }
 
-// 老任务：步骤没有时间和说明，连续同类的还合并成了一步；按深度搜索记下的「搜了什么、读了哪些网页」拆回一步一步
-function legacySteps(t, r) {
-  const inRound = (x) => (!r.startedAt || x.at >= r.startedAt) && (!r.endedAt || x.at <= r.endedAt);
-  const research = [
-    ...(t.research?.searches || []).map((x) => ({ ...x, name: 'deep_web_search' })),
-    ...(t.research?.reads || []).map((x) => ({ ...x, name: 'read_webpage' })),
-  ].filter(inRound).sort((a, b) => a.at.localeCompare(b.at));
-  const runs = []; // 连续同类的合成一段，和合并过的步骤一一对上
-  for (const x of research) { if (runs.at(-1)?.[0].name === x.name) runs.at(-1).push(x); else runs.push([x]); }
-  return r.steps.flatMap((s) => {
-    const i = runs.findIndex((g) => g[0].name === s.name);
-    if (i < 0) return [{ title: stepTitle(s), name: s.name, state: s.status === 'running' ? 'running' : 'done' }];
-    return runs.splice(0, i + 1).at(-1).map((x) => (x.name === 'deep_web_search'
-      ? { title: x.n == null ? `搜「${x.q}」` : x.n ? `搜「${x.q}」，找到 ${x.n} 条结果` : `搜「${x.q}」，没有结果`, name: x.name, at: x.at, state: x.n === 0 ? 'warn' : 'done' }
-      : { title: x.ok === false ? `打开 ${hostOf(x.url) || x.url}，没读到内容` : `读了「${x.title || hostOf(x.url)}」`, detail: [x.url, x.ok === false && x.note].filter(Boolean).join('\n'),
-        name: x.name, at: x.at, state: x.ok === false ? 'warn' : 'done' }));
-  });
-}
-
-// 用沙箱浏览器的步骤：按时间把浏览器里的每个动作和关键帧（回放）挂到那一步下面；正在跑的那一步放实时画面。
-// lists 是一轮里的几段（执行 agent、各个子 agent）：沙箱一次只做一件、先来先做，几个子 agent 同时在等时，
-// 按开始时间先挂给先开始的那步，实时画面也只放在最先开始、还在跑的那步下面
-function attachBrowser(t, lists, r) {
+// 用沙箱浏览器的步骤：按时间把浏览器里的每个动作和关键帧（回放）挂到那一步下面；正在跑的那一步放实时画面
+function attachBrowser(t, items, r) {
   const b = t.browser;
   if (!b) return;
   const used = new Set();
-  const marks = lists.flat().filter((x) => x.at && SANDBOX_TOOLS.has(x.name)).sort((x, y) => Date.parse(x.at) - Date.parse(y.at));
+  const marks = items.filter((x) => x.at && SANDBOX_TOOLS.has(x.name)).sort((x, y) => Date.parse(x.at) - Date.parse(y.at));
   let live = r.current && t.status === 'running' && b.active;
   marks.forEach((x, i) => {
     const from = Date.parse(x.at) - 300;
@@ -687,11 +598,9 @@ function stepHtml(t, s, key, last) {
   </div>`;
 }
 
-// 一段轨迹：小标题（MAIN / SUBAGENT 01）+ 每一步各是一块（单独更新，实时画面那一步变了不会连带别的步骤重画）；子 agent 那段标题下面写它的目标
-function sectionBlocks(t, key, label, sub, steps, goal) {
-  const blocks = [{ key, html: `<div class="tssec"><b>${label}</b><span>${sub}</span>${goal ? `<p class="tsgoal">${esc(goal)}</p>` : ''}</div>` }];
-  if (!steps) return [...blocks, { key: `${key}:none`, html: '<div class="tsnone">这一轮的步骤没有记下来</div>' }];
-  return [...blocks, ...steps.map((s, i) => ({ key: `${key}:${i}`, html: stepHtml(t, s, `${key}:${i}`, i === steps.length - 1) }))];
+// 一段轨迹：小标题（MAIN / SUBAGENT 01）+ 每一步各是一块（单独更新，实时画面那一步变了不会连带别的步骤重画）
+function sectionBlocks(t, key, label, sub, steps) {
+  return [{ key, html: `<div class="tssec"><b>${label}</b><span>${sub}</span></div>` }, ...steps.map((s, i) => ({ key: `${key}:${i}`, html: stepHtml(t, s, `${key}:${i}`, i === steps.length - 1) }))];
 }
 
 function sheetHead(t) {
@@ -737,9 +646,7 @@ function renderTaskSheet() {
   if (t.call) items.push({ key: 'call', html: `<div class="tscall">${callHtml(t)}</div>` });
   items.push(...sectionBlocks(t, 'main', 'MAIN', '喵团 · 主 agent', mainSteps(t)));
   const rounds = taskRounds(t);
-  let n = 0;
-  const no = () => `SUBAGENT ${String(++n).padStart(2, '0')}`;
-  rounds.forEach((r, i) => items.push(...roundSections(t, r, i, rounds, no)));
+  rounds.forEach((r, i) => items.push(...roundSections(t, r, i, rounds)));
   const result = resultBlock(t);
   if (result) items.push({ key: 'result', html: result });
   patchList($('#taskDetail'), items);
@@ -855,14 +762,6 @@ const REV_STATE = {
 // ---------- 目标 ----------
 // once：一次性的（没接通的自动重拨），到点跑一次
 const scheduleLabel = (s) => (s?.once ? `${dayClock(s.once)} 一次` : s?.at ? `每天 ${s.at}` : s?.every >= 60 ? `每 ${+(s.every / 60).toFixed(1)} 小时` : `每 ${s?.every} 分钟`);
-
-function ago(iso) {
-  const s = Math.round((Date.now() - Date.parse(iso)) / 1000);
-  if (s < 60) return '刚刚';
-  if (s < 3600) return `${Math.floor(s / 60)} 分钟前`;
-  if (s < 86400) return `${Math.floor(s / 3600)} 小时前`;
-  return `${Math.floor(s / 86400)} 天前`;
-}
 
 // 今天的只写时间，别的日子带上日期
 const dayClock = (iso) => {

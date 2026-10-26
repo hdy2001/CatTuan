@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import { parse, stringify } from 'yaml';
+import { parse } from 'yaml';
 
 export function readJson(file, fallback = null) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
@@ -26,8 +26,6 @@ export function readConfig(home) {
     return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   } catch (error) { if (error.code === 'ENOENT') return {}; throw error; }
 }
-
-export function writeConfig(home, config) { writeText(path.join(home, 'config.yaml'), stringify(config)); }
 
 export function readEnv(file) {
   let text;

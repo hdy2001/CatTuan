@@ -1,4 +1,4 @@
-// 主 agent（聊天里的喵团）的聊天专用工具：派子 agent、改 / 停子 agent、提问卡、待确认的电话、目标。干活的工具（搜索、读网页、
+// 主 agent（聊天里的喵团）的聊天专用工具：派子 agent、改 / 停子 agent、提问卡、目标。干活的工具（搜索、读网页、
 // 搜图、看图、记忆……）和子 agent 是同一套（pi-tools.mjs），由 dispatcher.mjs 合进来。这些工具都在 App 进程里直接改这个人的状态；
 // App 的函数由 server.mjs 注入（actions），这里只管参数校验、额度和这一轮要挂到回复上的东西（turn.attach）。
 //
@@ -16,11 +16,11 @@ export function createDispatcherTools({ u, chatId, turn, actions }) {
   const did = (s) => { turn.did.push(s); };
 
   // 派子 agent：App 把这个聊天到现在的会话复制一份给它（forkChat），它看得到前面聊的、查到的、用户发的图
-  function dispatchTask({ title, brief, category, research, callMode }) {
+  function dispatchTask({ title, brief, category, research }) {
     const over = actions.overQuota(u, 'tasks');
     if (over) return text(`没派出去：${over}（把这句话告诉用户）`);
     const t = actions.createTask(u, { title: str(title, 20) || '后台任务', brief, kind: research ? 'research' : 'chat',
-      chatId, callMode, category, query: turn.userText, forkChat: chatId });
+      chatId, category, query: turn.userText, forkChat: chatId });
     Object.assign(turn.attach, { taskId: t.id, round: 1 });
     did(`派出${t.kind === 'research' ? '深度搜索' : '子 agent'}「${t.title}」`);
     return done(`已派出子 agent ${t.id}「${t.title}」，排队中。结果出来后会发给你，由你告诉用户。`);
@@ -35,13 +35,11 @@ export function createDispatcherTools({ u, chatId, turn, actions }) {
         task: { type: 'string', description: '这次让它做什么、做到什么程度、交回什么。聊天里说过的不用复述（它都看得到），写「打给刚才那家」「结果里的第 3 家」就行' },
         category: CATEGORY,
         research: { type: 'boolean', description: '要全面查清楚、调研、对比、找途径时写 true（深度搜索，出研究报告）' },
-        call: { type: 'string', enum: ['ask'], description: '要打只问不约的电话时写 ask。要约的电话不能用这个，走 propose_call' },
       }, required: ['title', 'task'] },
       async execute(_id, args) {
         const brief = str(args?.task, 4000);
         if (!brief) return text('task 不能为空');
-        return dispatchTask({ title: args.title, brief, category: args.category, research: args.research === true,
-          callMode: args.call === 'ask' ? 'ask' : undefined });
+        return dispatchTask({ title: args.title, brief, category: args.category, research: args.research === true });
       },
     },
     {
@@ -96,42 +94,6 @@ export function createDispatcherTools({ u, chatId, turn, actions }) {
         turn.attach.booking = ask;
         did('出了提问卡');
         return done('提问卡会挂在你这条回复下面');
-      },
-    },
-    {
-      name: 'propose_call', label: '准备打电话',
-      description: '要约的电话（会报预约人、替用户答应）：信息齐了先用它存一通待确认的电话，同时一句话说清打给谁、约什么、碰到什么先回来问，最后问「现在打吗？」。用户要改就按新要求再调一次。',
-      parameters: { type: 'object', properties: {
-        title: { type: 'string', description: '不超过 12 个字' },
-        brief: { type: 'string', description: '打给谁（店名、电话；聊天里有的写「刚才那家」就行）、要办的事、日期时间人数项目、要问清的事、碰到哪些情况不答应先回来问' },
-      }, required: ['title', 'brief'] },
-      async execute(_id, args) {
-        const brief = str(args?.brief, 4000);
-        if (!brief) return text('brief 不能为空');
-        actions.setPendingCall(u, { title: str(args.title, 20) || '打电话', brief });
-        did('等你确认要不要打电话');
-        return done('已存成待确认的电话，用户点头后调 confirm_call');
-      },
-    },
-    {
-      name: 'confirm_call', label: '开始打电话',
-      description: '【待确认的电话】里有，用户回「打吧」「好」「可以」时调用，按那通电话派子 agent 去打（可以直接约）。',
-      parameters: { type: 'object', properties: {} },
-      async execute() {
-        const pending = actions.pendingCall(u);
-        if (!pending) return text('没有待确认的电话了（过期了）。问用户要打给谁、约什么');
-        actions.setPendingCall(u, null);
-        return dispatchTask({ title: pending.title, brief: `${pending.brief}\n用户已经确认，可以直接约。`, callMode: 'book' });
-      },
-    },
-    {
-      name: 'cancel_call', label: '不打了',
-      description: '用户说不约了，清掉待确认的电话。',
-      parameters: { type: 'object', properties: {} },
-      async execute() {
-        actions.setPendingCall(u, null);
-        did('不打那通电话了');
-        return done('已清掉待确认的电话');
       },
     },
     {

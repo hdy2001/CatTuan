@@ -20,14 +20,9 @@ const PROXY = process.env.SANDBOX_PROXY || process.env.HTTPS_PROXY || process.en
 const DIRECT = ['cn', 'baidu.com', 'zhihu.com', 'qq.com', 'sohu.com', '163.com', 'douban.com', 'csdn.net', 'jianshu.com', 'bing.com', 'sina.com.cn'];
 const GAP = 5_000; // 两次页面访问的最小间隔
 
-// 用 Playwright 缓存里的 Chrome for Testing（playwright-core 1.63.0 ↔ chromium-1243）。
-// 优先用 sandbox/chrome/ 下的副本：它的 Info.plist 补了蓝牙用途说明并重新签名。原版缺这项，
-// Google 登录页尝试蓝牙通行密钥时会被 macOS 隐私保护（TCC）直接杀掉 —— 表现为登录窗口「闪退」。
-// 生成副本：scripts/patch-sandbox-chrome.sh。Linux 服务器上用 deploy/setup.sh 装的那份（x64 / arm64）。
+// 用 Playwright 缓存里的 Chrome for Testing（playwright-core 1.63.0 ↔ chromium-1243）。Linux 服务器上用 deploy/setup.sh 装的那份（x64 / arm64）。
 function chromePath() {
   if (process.env.SANDBOX_CHROME) return process.env.SANDBOX_CHROME;
-  const patched = path.join(DIR, 'chrome/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing');
-  if (fs.existsSync(patched)) return patched;
   const root = process.env.PLAYWRIGHT_BROWSERS_PATH || path.join(os.homedir(), process.platform === 'darwin' ? 'Library/Caches/ms-playwright' : '.cache/ms-playwright');
   const dir = fs.existsSync(root) && fs.readdirSync(root).filter((d) => /^chromium-\d+$/.test(d)).sort().pop();
   return dir && ['chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing',

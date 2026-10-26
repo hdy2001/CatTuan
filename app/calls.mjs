@@ -2,7 +2,6 @@
 // 现在接的是 Mock 外呼平台：按图灵外呼 / 木星可能返回的所有结果随机挑一个——拨号前被平台拦下、打出去没接通（各种挂断原因）、
 // 接通后的各种业务结果；接通的通话转写和问到的信息让 LongCat 按挑中的结果现编。以后换真平台，只换 dial() 这一段。
 // 规则在代码里兜底，不靠模型自觉：
-//   - 要约的电话（mode=book：会报预约人、会替用户答应）只能在用户点过头的任务里打（task.callMode === 'book'）
 //   - 要约的电话必须带齐预约信息：日期、时间、人数，再加品类必填项（美甲要项目……），缺了不拨，告诉 agent 缺什么
 //   - 同一个号码每人每天最多打 2 次（平台规则，第 3 次直接拦下）
 // 通话记录存在每个人数据目录的 calls.json：聊天里的通话组件、侧边栏「喵团档案 → 电话」里的通话记录都从这里来。
@@ -24,7 +23,7 @@ const FORCED = Object.fromEntries(String(process.env.CALL_MOCK_OUTCOME || '').sp
 // modes：只在只问不约（ask）或要约（book）的电话里出现，没写就两种都会有。needUser：没答应，要回来问用户。
 // retry：soon 马上可以再试 / later 过一阵再打 / tomorrow 明天再打 / rewrite 换个说法再打 / no 别再打了。weight：随机挑的权重。
 // platform / release：图灵外呼的错误码、木星的挂断原因码，以后接真平台时对得上。
-export const OUTCOMES = [
+const OUTCOMES = [
   { code: 'off_hours', phase: 'blocked', label: '不在外呼时间（8:00–20:00）', platform: 101000, retry: 'later', weight: 2 },
   { code: 'sensitive', phase: 'blocked', label: '话术里有敏感词，被平台拦了', platform: 1014, retry: 'rewrite', weight: 1 },
   { code: 'complaint_risk', phase: 'blocked', label: '对方是易投诉号码，平台不让打', platform: 3004, retry: 'no', weight: 1 },
@@ -177,9 +176,6 @@ export async function placeCall(deps, u, task, req, onStage = () => {}) {
   const to = String(req.to || '').trim();
   const name = String(req.name || '').trim() || '对方';
   if (!digits(to)) return refuse('no_number', '没有对方的电话号码：先搜到这家的电话再打');
-  if (mode === 'book' && task?.callMode !== 'book') {
-    return refuse('need_user_ok', '要约的电话（会报预约人、会替用户答应）得用户先点头。这次别拨：回来把打给谁、约什么说给用户，等他确认');
-  }
   const details = normalizeDetails(req.details);
   const missing = mode === 'book' ? missingDetails(req.category, details) : [];
   if (missing.length) return refuse('missing_info', `还缺：${missing.join('、')}。别拨，回来问用户`, { missing });
