@@ -124,5 +124,17 @@ test('scripts/migrate.mjs backs up, migrates a data directory and is safe to run
   const second = migrate();
   assert.equal(second.status, 0, second.stderr);
   assert.match(second.stdout, /都已经是新格式/);
+  assert.equal(fs.readdirSync(path.join(data, 'backups')).length, 1, 'nothing to change, no new backup');
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8')), state);
+
+  // App 载入再落盘后，版本号还在：下次迁移仍然认得是新格式
+  process.env.CATTUAN_DATA_DIR = data;
+  const { createStore } = await import('./store.mjs');
+  const accounts2 = openAccounts(data);
+  const store = createStore({ accounts: accounts2 });
+  store.load(accounts2.getUser(user.id));
+  store.flush();
+  accounts2.db.close();
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'state.json'), 'utf8')).version, 2);
+  assert.match(migrate().stdout, /都已经是新格式/);
 });

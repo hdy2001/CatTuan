@@ -4,7 +4,9 @@
 //               目标动态的文字 → { type, text }；去掉已删功能的残留（记账、网站卡片、gateway 的 run id）
 //   config.yaml：老的工具开关键名（platform_toolsets.api_server……）→ toolsets / disabled_tools，工具集改名
 //   .env：去掉每个账号 gateway 的端口和 key（API_SERVER_*）
-const STATE_VERSION = 2;
+
+
+import { STATE_VERSION } from './store.mjs';
 
 const GALLERY = /`?GALLERY:[^\n]*`?/gi;
 const TOOLSET_RENAME = { idol: 'images', deepsearch: 'web', skillstore: 'skills' };

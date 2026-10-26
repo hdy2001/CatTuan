@@ -5,6 +5,9 @@ import path from 'node:path';
 import { userDir, homeOf, syncHome } from '../homes.mjs';
 import { readJson, writeText } from '../tools/common.mjs';
 
+// state.json 的格式版本：scripts/migrate.mjs 按它判断要不要转换。新账号直接是当前版本；老文件没有就保持没有，等迁移来标
+export const STATE_VERSION = 2;
+
 export function createStore({ accounts }) {
   const users = new Map(); // 用户 id → { id, name, role, status, dir, home, state, clients, activity, saveTimer }
   const loaders = []; // 各模块在一个人第一次载入时要做的事（续跑任务、补聊天……）
@@ -15,6 +18,7 @@ export function createStore({ accounts }) {
     u.saveTimer = null;
     const s = u.state;
     writeText(path.join(u.dir, 'state.json'), JSON.stringify({
+      version: s.version,
       // 每个聊天最多留最近 300 条；任务只留最近 80 个
       messages: s.chats.flatMap((c) => s.messages.filter((m) => m.chatId === c.id).slice(-300)),
       chats: s.chats, currentChat: s.currentChat, stats: s.stats,
@@ -38,7 +42,7 @@ export function createStore({ accounts }) {
       const home = homeOf(row);
       fs.mkdirSync(dir, { recursive: true });
       syncHome(home); // 模板里改过的人设和技能，载入时带上
-      const saved = readJson(path.join(dir, 'state.json'), {}) || {};
+      const saved = readJson(path.join(dir, 'state.json'), null) || { version: STATE_VERSION };
       const state = { messages: [], tasks: [], goals: [], chats: [], stats: { tasksDone: 0, reports: 0, since: new Date().toISOString() }, ...saved };
       const u = { id: row.id, name: row.name, role: row.role, status: row.status, dir, home, state, clients: new Set(), activity: [], saveTimer: null };
       for (const x of [...state.tasks, ...state.goals]) x.uid = u.id;
