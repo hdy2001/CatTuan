@@ -3,9 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { DatabaseSync } from 'node:sqlite';
 import { createKnowledgeTools, knowledgeContext } from './knowledge.mjs';
-import { createToolContext } from '../pi-tools.mjs';
+import { createToolContext } from '../agent/tools.mjs';
 import { readConfig } from './common.mjs';
 
 function fixture(t) {
@@ -52,23 +51,17 @@ test('skill changes remain scoped, keep built-ins and exclude disabled context',
   assert.equal((await invoke(ctx, 'skill_view', { name: 'builtin', file_path: '../../../config.yaml' })).success, false);
 });
 
-test('adopted administrator can view their uploads while other accounts stay isolated', async t => {
-  const fixtureCtx = fixture(t), root = fixtureCtx.home;
+test('vision reads the owner\'s uploads, even when the home is the shared template, and nobody else\'s', async t => {
+  const root = fixture(t).home;
   const home = path.join(root, 'agent-home'), dataDir = path.join(root, 'app/data');
   fs.mkdirSync(home);
-  fs.mkdirSync(dataDir, { recursive: true });
-  const db = new DatabaseSync(path.join(dataDir, 'app.db'));
-  db.exec('CREATE TABLE users (id TEXT, agent_home TEXT)');
-  db.prepare('INSERT INTO users VALUES (?,?)').run('admin', 'agent-home');
-  db.prepare('INSERT INTO users VALUES (?,?)').run('other', null);
-  db.close();
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAAEklEQVR4nGP8z4AdMOEQH6QSAM1BAQ/oQeJvAAAAAElFTkSuQmCC', 'base64');
   for (const id of ['admin', 'other']) {
     const dir = path.join(dataDir, 'users', id, 'uploads');
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'image.png'), png);
   }
-  const ctx = createToolContext({ home, root, env: { CATTUAN_DATA_DIR: dataDir } });
+  const ctx = createToolContext({ home, user: { id: 'admin', dir: path.join(dataDir, 'users/admin') } });
   const own = await invoke(ctx, 'vision_analyze', { image_url: path.join(dataDir, 'users/admin/uploads/image.png') });
   assert.equal(own.content[1].mimeType, 'image/png');
   assert.equal((await invoke(ctx, 'vision_analyze', { image_url: path.join(dataDir, 'users/other/uploads/image.png') })).success, false);

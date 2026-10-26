@@ -285,7 +285,7 @@ button.pushtag { border: 0; background: none; padding: 0; cursor: pointer; text-
   background: linear-gradient(160deg, #34413a, #1b231f); box-shadow: 0 6px 16px rgba(10, 20, 15, .28); }
 .tvmini .tvdot { position: absolute; top: 6px; right: 6px; }
 
-/* ---- 像素小猫：在输入框和顶部聊天标题栏之间来回爬（见 app.js pixelCat） ---- */
+/* ---- 像素小猫：在输入框和顶部聊天标题栏之间来回爬（见 ui/profile.js pixelCat） ---- */
 #chatView { overflow: hidden; } /* 小猫拐弯时身体会伸出墙外，裁掉，不让页面出横向滚动 */
 .pixelcat { position: absolute; left: 0; top: 0; z-index: 4; pointer-events: none; background-repeat: no-repeat;
   image-rendering: pixelated; transform-origin: 50% 100%; will-change: transform; transition: opacity .3s;
@@ -425,12 +425,8 @@ button.topbtn:hover { background: var(--chip); }
 .dd-awards td:first-child, .dd-awards td:nth-child(2) { color: #555; }
 }
 
-/* ---- 普通搜索的过程块（仿 Claude）和搜不到时的一键选项 ---- */
-.qopts { display: flex; flex-wrap: wrap; gap: 6px; }
-.qopt { padding: 6px 12px; border: 1px solid var(--accent); border-radius: 99px; background: var(--panel); color: var(--accent-strong); font-size: 13px; cursor: pointer; }
-.qopt:hover { background: var(--accent-soft); }
 
-/* ---- 电话预订（Longcat 第一期 PRD）：聊天里只有提问选项卡，其余都是普通消息；任务页里的通话记录；App 外通知。见 booking.js ---- */
+/* ---- 电话预订（Longcat 第一期 PRD）：聊天里只有提问选项卡，其余都是普通消息；任务页里的通话记录；App 外通知。见 ui/cards.js ---- */
 :root { --bk-amber: #a8730f; --bk-amber-bg: rgba(224, 163, 38, .14); }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bk-amber: #e8b75a; } }
 :root[data-theme="dark"] { --bk-amber: #e8b75a; }

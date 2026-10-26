@@ -44,7 +44,7 @@ test('public downloads pin DNS, revalidate redirects, preserve bytes and enforce
   await assert.rejects(fetchPublic('http://example.com/bytes', { ...options, maxBytes: 2 }), /大小限制/);
 });
 
-test('sandbox tools preserve task attribution and stable image ids', async t => {
+test('sandbox tools carry the task id, and image ids are stable', async t => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'cattuan-web-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const calls = [];
@@ -53,13 +53,15 @@ test('sandbox tools preserve task attribution and stable image ids', async t => 
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ results: [{ title: 'Result', url: 'https://example.com' }] }));
   });
-  const tools = createWebTools({ home, sessionId: 'task-t_web', env: { CATTUAN_SANDBOX_URL: url } });
+  const tools = createWebTools({ home, sessionId: 'task-t_web', taskId: 't_web', env: { CATTUAN_SANDBOX_URL: url } });
   const invoke = (name, args) => tools.find(tool => tool.name === name).execute(args);
   const found = await invoke('deep_web_search', { query: '测试' });
   assert.equal(found.results[0].n, 1);
   assert.equal(calls[0].task, 't_web');
   assert.equal(new URL(calls[0].url, url).searchParams.get('q'), '测试');
-  assert.equal(tools.some(tool => ['official_account', 'official_photos', 'xiaohongshu_search'].includes(tool.name)), false);
+  assert.deepEqual(tools.map(tool => tool.name), ['deep_web_search', 'read_webpage', 'image_search', 'fetch_url']);
+  assert.ok(tools.find(tool => tool.name === 'read_webpage').usesBrowser);
+  assert.equal(tools[0].describe({ query: '测试' }).done({ results: [{ title: 'A', url: 'https://www.example.com/x' }] }).title, '搜「测试」，找到 1 条结果');
   const item = { murl: 'https://example.com/image.png', turl: 'https://example.com/thumb.png', purl: 'https://example.com/page', t: 'Picture' };
   const html = `<a class="iusc" m="${JSON.stringify(item).replaceAll('"', '&quot;')}"></a>`;
   const first = parseImages(html, 'first')[0], second = parseImages(html, 'second')[0];

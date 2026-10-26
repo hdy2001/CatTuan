@@ -4,6 +4,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { isIP } from 'node:net';
 import { tool } from './common.mjs';
+import { clip, hostOf } from '../core/util.mjs';
 
 const object = (properties, required = []) => ({ type: 'object', properties, ...(required.length ? { required } : {}) });
 const str = (description) => ({ type: 'string', ...(description ? { description } : {}) });
@@ -152,8 +153,8 @@ export function createWebTools(ctx) {
   const sandbox = async (endpoint, params = {}, signal, timeoutMs = 120000) => {
     const url = new URL(endpoint, ctx.env?.CATTUAN_SANDBOX_URL || 'http://127.0.0.1:8660');
     for (const [key, value] of Object.entries(params)) url.searchParams.set(key, String(value));
-    const task = /^task-(t_[a-z0-9]+)$/.exec(String(ctx.sessionId || ''))?.[1];
-    const response = await fetch(url, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs), headers: task ? { 'x-cattuan-task': task } : {} });
+    // 带上任务编号：App 按它把沙箱的实时画面推给任务的主人
+    const response = await fetch(url, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs), headers: ctx.taskId ? { 'x-cattuan-task': ctx.taskId } : {} });
     const chunks = [];
     let size = 0;
     for await (const chunk of response.body || []) {
@@ -181,9 +182,18 @@ export function createWebTools(ctx) {
     return merged.slice(0, 30);
   };
   return [
-    tool('deep_web_search', 'deepsearch', {
+    tool('deep_web_search', 'web', {
+      label: '网页搜索', usesBrowser: true,
+      describe: (a) => {
+        const act = `搜「${clip(a.query, 40)}」`;
+        return { act, done: (o) => {
+          const rs = o.results || [];
+          return { title: rs.length ? `${act}，找到 ${rs.length} 条结果` : `${act}，没有结果`, ok: rs.length > 0,
+            detail: rs.length ? rs.slice(0, 4).map((r) => `${clip(r.title, 40)} · ${hostOf(r.url)}`).join('\n') : o.hint };
+        } };
+      },
       description: '用必应搜网页（在真实浏览器里搜，中文结果好），返回标题、网址和摘要；摘要不够就用 read_webpage 读原文。问到具体的店、品牌、产品、人物、事件、价格、地址、营业时间、新闻时，先用它查，不要凭记忆答。深度搜索时多换几个角度的关键词：官方说法、对比、评测、时间范围、反方观点。',
-      parameters: object({ query: str('搜索词，例如「看天下 杂志 图书馆 数字资源」') }, ['query']),
+      parameters: object({ query: str('搜索词') }, ['query']),
     }, wrap(async ({ query = '' }, signal) => {
       query = query.trim();
       if (!query) return { error: 'query 不能为空' };
@@ -192,7 +202,11 @@ export function createWebTools(ctx) {
       const results = (data.results || []).map((result, i) => ({ n: i + 1, ...result }));
       return { query, results, ...(!results.length ? { hint: '没搜到，换个说法再试' } : {}) };
     }, '沙箱不可用：')),
-    tool('read_webpage', 'deepsearch', {
+    tool('read_webpage', 'web', {
+      label: '读网页', usesBrowser: true,
+      describe: (a) => ({ act: `打开 ${hostOf(a.url)}`, detail: a.url, done: (o) => (o.text
+        ? { title: `读了「${clip(o.title || hostOf(o.url || a.url), 28)}」`, detail: [o.url || a.url, `读到约 ${o.text.length} 字${o.truncated ? '（很长，只读了前面）' : ''}`, o.note].filter(Boolean).join('\n') }
+        : { title: `打开 ${hostOf(a.url)}，没读到内容`, detail: [a.url, o.note].filter(Boolean).join('\n'), ok: false }) }),
       description: '打开一个网页读正文（在真实浏览器里打开，能读靠脚本渲染的页面）。不会下载文件（PDF、压缩包等会被拒），不能登录、不能访问内网。返回标题和正文；读不到正文时 note 会说明原因，换个来源。',
       parameters: object({ url: str('网页地址（通常来自 deep_web_search 的结果）') }, ['url']),
     }, wrap(async ({ url = '' }, signal) => {
@@ -203,8 +217,13 @@ export function createWebTools(ctx) {
       const text = String(data.text || '');
       return { url: data.finalUrl || url, title: data.title || '', text: text.slice(0, 12000), ...(data.note ? { note: data.note } : {}), ...(text.length > 12000 ? { truncated: true } : {}) };
     }, '沙箱不可用：')),
-    tool('idol_photo_search', 'idol', {
-      description: '按关键词搜网上的公开图片（人物、地点、商品、作品、活动现场等），可以按时间过滤只要最近的图。一次调用传多个关键词会并行搜索并合并去重，所以把同一样东西的几种叫法（中文名、外文名）放进同一次调用的 queries 里。关键词用名称本身效果最好；需要特定内容时再加一个具体词（地点、活动名、型号），不要加「高清」「图片」这类泛词。返回每张图的 id、标题、来源站点。选好后在回复末尾单独一行写 `GALLERY: id1,id2,...`（按展示顺序），App 会渲染成图墙。',
+    tool('image_search', 'images', {
+      label: '搜图片',
+      describe: (a) => {
+        const act = `搜图「${clip((a.queries || [a.query]).filter(Boolean).join('、'), 30)}」`;
+        return { act, done: (o) => ({ title: o.photos?.length ? `${act}，找到 ${o.photos.length} 张` : `${act}，没找到`, ok: !!o.photos?.length }) };
+      },
+      description: '按关键词搜网上的公开图片（人物、地点、商品、作品、活动现场等），可以按时间过滤只要最近的图。一次调用传多个关键词会并行搜索并合并去重，所以把同一样东西的几种叫法（中文名、外文名）放进同一次调用的 queries 里。关键词用名称本身效果最好；需要特定内容时再加一个具体词（地点、活动名、型号），不要加「高清」「图片」这类泛词。返回每张图的 id、标题、来源站点；要给用户看就挑好后用 attach 的 image_ids 附上。',
       parameters: object({ queries: { type: 'array', items: str(), maxItems: 4, description: '1–4 个关键词，例如 ["故宫 雪景", "Forbidden City snow"]' }, days: { type: 'integer', description: '只要最近多少天的图：1、7、30（默认 7；结果太少会自动放宽到 30）' }, offset: { type: 'integer', description: '翻页偏移，用户说「再来一些」时传 10、20…' } }, ['queries']),
     }, wrap(async (args, signal) => {
       const queries = (args.queries || (args.query ? [args.query] : [])).filter((q) => typeof q === 'string' && q.trim()).map((q) => q.trim()).slice(0, 4);
@@ -213,9 +232,12 @@ export function createWebTools(ctx) {
       const offset = integer(args.offset, 0);
       let photos = await searchImages(queries, days, offset, signal);
       if (photos.length < 6 * queries.length && days < 30) { days = 30; photos = await searchImages(queries, days, offset, signal); }
+      for (const photo of photos) ctx.media?.set(photo.id, photo); // attach 按 id 取
       return photos.length ? { queries, days, photos } : { queries, photos: [], hint: '没有结果，换个更短的关键词（比如只用名字）' };
     }, '搜索失败：')),
-    tool('fetch_url', 'skillstore', {
+    tool('fetch_url', 'web', {
+      label: '读网址',
+      describe: (a) => ({ act: `读网址 ${hostOf(a.url)}`, detail: a.url }),
       description: '只读地打开一个公开网址（GET），返回正文文本或 JSON（最多约 1.2 万字）。给技能用：查天气（wttr.in?format=j2）、汇率、公开 API、文章正文。不能访问内网地址，不能提交表单或登录。不要用它抓社媒平台。',
       parameters: object({ url: str('http(s) 网址') }, ['url']),
     }, wrap(async ({ url = '' }, signal) => {

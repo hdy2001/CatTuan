@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 本机用：等喵团空闲（所有人都没有进行中、排队中的后台任务）再重启指定服务，避免打断正在跑的任务。线上用 systemctl restart。
-# 用法：scripts/restart.sh app|agent|sandbox|all   [最长等待秒数，默认 600]
-#   agent：重启 agent 守护进程（scripts/agents.mjs），它会把每个账号的 Pi gateway 都重新拉起来
+# 用法：scripts/restart.sh app|sandbox|all   [最长等待秒数，默认 600]
+#   app 包括主 agent 和子 agent：重启时没跑完的任务会在重启后接着做
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 DATA="${CATTUAN_DATA_DIR:-$ROOT/app/data}"
@@ -44,15 +44,9 @@ if [ "$WHAT" = sandbox ] || [ "$WHAT" = all ]; then
   launch "$ROOT/sandbox/server.out" "$ROOT/scripts/start-sandbox.sh"
   up 8660 && echo "sandbox 已重启"
 fi
-if [ "$WHAT" = agent ] || [ "$WHAT" = all ]; then
-  pkill -f "node .*scripts/agents.mjs" || true
-  for _ in $(seq 1 30); do pgrep -f "node .*scripts/agents.mjs" >/dev/null || break; sleep 1; done
-  pkill -f "node .*app/pi-gateway.mjs" || true # 兼容直接运行 start-agent.sh 的本机实例
-  launch "$DATA/agents.out" node "$ROOT/scripts/agents.mjs"
-  echo "agent 守护进程已重启，各账号的 agent 陆续起来（看 $DATA/agents.out）"
-fi
 if [ "$WHAT" = app ] || [ "$WHAT" = all ]; then
-  pkill -f "node .*app/server.mjs" || true; sleep 1
+  pkill -f "node .*app/server.mjs" || true
+  for _ in $(seq 1 30); do pgrep -f "node .*app/server.mjs" >/dev/null || break; sleep 1; done # 等它把状态写完
   launch "$DATA/server.out" "$ROOT/scripts/start-app.sh"
   up "$PORT" && echo "app 已重启"
 fi

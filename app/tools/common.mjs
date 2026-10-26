@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
-import { parse } from 'yaml';
+import { parse, stringify } from 'yaml';
 
 export function readJson(file, fallback = null) {
   try { return JSON.parse(fs.readFileSync(file, 'utf8')); }
@@ -18,13 +18,26 @@ export function writeText(file, text) {
   } finally { fs.rmSync(temporary, { force: true }); }
 }
 
-export function writeJson(file, value) { writeText(file, `${JSON.stringify(value, null, 2)}\n`); }
+function writeJson(file, value) { writeText(file, `${JSON.stringify(value, null, 2)}\n`); }
+
+export const writeConfig = (home, config) => writeText(path.join(home, 'config.yaml'), stringify(config));
 
 export function readConfig(home) {
   try {
     const value = parse(fs.readFileSync(path.join(home, 'config.yaml'), 'utf8'));
     return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   } catch (error) { if (error.code === 'ENOENT') return {}; throw error; }
+}
+
+// 工具开关（每个人 home 里的 config.yaml）：toolsets 里列的工具集才启用，disabled_tools 再单独关掉某个工具或工具集；
+// core（attach）总是开着。返回 spec → 是否可用。
+const DEFAULT_TOOLSETS = ['images', 'vision', 'memory', 'session_search', 'skills', 'web', 'phone'];
+export const nameSet = (value) => new Set(Array.isArray(value) ? value.map(String) : typeof value === 'string' ? value.split(',').map((v) => v.trim()).filter(Boolean) : []);
+export function enabledTools(config) {
+  const on = nameSet(config.toolsets ?? DEFAULT_TOOLSETS);
+  const off = nameSet(config.disabled_tools);
+  return (spec) => (spec.toolset === 'core' || on.has(spec.toolset)) && !off.has(spec.name) && !off.has(spec.toolset)
+    && (spec.name !== 'memory' || config.memory?.memory_enabled !== false || config.memory?.user_profile_enabled !== false);
 }
 
 export function readEnv(file) {
@@ -70,24 +83,8 @@ export async function withFileLock(file, fn, signal) {
   finally { fs.rmSync(lock, { recursive: true, force: true }); }
 }
 
-export async function fetchJson(url, { timeoutMs = 120000, signal, ...options } = {}) {
-  const combined = signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
-  const response = await fetch(url, { ...options, signal: combined });
-  const chunks = [];
-  let size = 0;
-  for await (const chunk of response.body || []) {
-    size += chunk.length;
-    if (size > 4 * 1024 * 1024) throw new Error('接口返回内容过大');
-    chunks.push(chunk);
-  }
-  const raw = Buffer.concat(chunks).toString('utf8');
-  let value;
-  try { value = raw ? JSON.parse(raw) : {}; }
-  catch { throw Object.assign(new Error(`接口返回了无效 JSON（${response.status}）`), { status: response.status }); }
-  if (!response.ok) throw Object.assign(new Error(value.message || value.error || `接口返回 ${response.status}`), { status: response.status, body: value });
-  return value;
-}
-
-export function tool(name, toolset, schema, execute) {
-  return { name, toolset, description: schema.description, parameters: schema.parameters, execute };
+// label：给人看的工具名；describe(args) → { act, detail, done(out) }：这一步在做什么、做完怎么写（任务轨迹和顶栏状态用）
+// usesBrowser：会用沙箱浏览器（任务轨迹里这一步挂浏览器画面和回放）
+export function tool(name, toolset, { label, description, parameters, describe, usesBrowser }, execute) {
+  return { name, toolset, label, description, parameters, describe, usesBrowser, execute };
 }

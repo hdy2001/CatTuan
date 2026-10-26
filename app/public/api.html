@@ -348,7 +348,7 @@ section { background: var(--bg); }
   function logEvent(ev) {
     const kind = ['message', 'task', 'activity'].includes(ev.type) ? ev.type : 'other';
     let tip = '';
-    if (ev.type === 'message') { const m = ev.message; tip = `${m.role} ${m.id}${m.taskId ? ` taskId=${m.taskId}` : ''}${m.partOf ? ` partOf=${m.partOf}` : ''}${m.report ? ' [report]' : ''}${m.booking ? ` [${m.booking.type}]` : ''} ${(m.text || '').slice(0, 60)}`; }
+    if (ev.type === 'message') { const m = ev.message; tip = `${m.role} ${m.id}${m.taskId ? ` taskId=${m.taskId}` : ''}${m.partOf ? ` partOf=${m.partOf}` : ''}${(m.attachments || []).map((a) => ` [${a.type}]`).join('')} ${(m.text || '').slice(0, 60)}`; }
     else if (ev.type === 'task') tip = `${ev.task.id}「${ev.task.title}」${ev.task.status} r${ev.task.round || 1} steps=${ev.task.steps?.length || 0}`;
     else if (ev.type === 'activity') tip = `${ev.activity.kind} ${ev.activity.status} ${ev.activity.step || ev.activity.outcome || ''}`;
     else if (ev.type === 'chats') tip = `currentChat=${ev.currentChat}`;
@@ -442,19 +442,18 @@ section { background: var(--bg); }
     const parts = [];
     if (m.text) parts.push(`<div class="bubble">${md(m.text)}</div>`);
     if (m.images?.length) parts.push(`<div class="imgs">${m.images.map(imgTag).join('')}</div>`);
-    if (m.photos?.length) parts.push(`<div class="imgs">${m.photos.slice(0, 8).map((p) => imgTag(typeof p === 'string' ? p : p.url || p.src || p.thumb || '')).join('')}</div>`);
-    if (m.report) {
-      const r = m.report;
-      parts.push(`<div class="card"><div class="hd"><span>📄 ${esc(r.title || '结果')}${r.kind === 'result' ? '' : ' · 研究报告'}</span><button class="ghost" data-expand>展开</button></div>
-        <div class="bd">${md(r.body || '')}</div>${r.sources?.length ? `<div class="src">${r.sources.map((s) => `<a href="${esc(s.url)}" target="_blank" rel="noopener">[${s.n}] ${esc(s.title)}</a>`).join('')}</div>` : ''}</div>`);
+    // 附件：attachments: [{ type: images | document | ask | calls, ... }]
+    for (const a of m.attachments || []) {
+      if (a.type === 'images') parts.push(`<div class="imgs">${a.items.slice(0, 8).map((p) => imgTag(p.thumb || p.image || '')).join('')}</div>`);
+      else if (a.type === 'document') {
+        parts.push(`<div class="card"><div class="hd"><span>📄 ${esc(a.title || '文档')}${a.sources?.length ? ' · 研究报告' : ''}</span><button class="ghost" data-expand>展开</button></div>
+          <div class="bd">${md(a.body || '')}</div>${a.sources?.length ? `<div class="src">${a.sources.map((s) => `<a href="${esc(s.url)}" target="_blank" rel="noopener">[${s.n}] ${esc(s.title)}</a>`).join('')}</div>` : ''}</div>`);
+      } else if (a.type === 'ask') parts.push(askCard(m, a));
+      else parts.push(`<div class="card"><div class="hd"><span>📎 ${esc(a.type)}</span><button class="ghost" data-expand>展开</button></div><div class="bd mono">${esc(JSON.stringify(a, null, 2))}</div></div>`);
     }
-    if (m.booking?.type === 'ask') parts.push(askCard(m));
-    else if (m.booking) parts.push(`<div class="card"><div class="hd"><span>📞 ${esc(m.booking.type)}</span><button class="ghost" data-expand>展开</button></div><div class="bd mono">${esc(JSON.stringify(m.booking, null, 2))}</div></div>`);
     const meta = [`<span>${hm(m.at)}</span>`, `<span class="id" data-copy="${esc(m.id)}" title="点击复制">${esc(m.id)}</span>`];
     if (m.taskId) meta.push(taskChip(m.taskId, m.partOf ? '结果' : '派出'));
     else if (m.partOf) meta.push(taskChip(m.partOf, '结果'));
-    if (m.steerOf) meta.push(taskChip(m.steerOf, '修改'));
-    if (m.stopOf) meta.push(taskChip(m.stopOf, '停止'));
     if (m.round > 1) meta.push(`<span>第 ${m.round} 轮</span>`);
     if (m.took) meta.push(`<span>用时 ${m.took}s</span>`);
     return `<div class="row ${m.role === 'me' ? 'me' : 'bot'}">${parts.join('')}<div class="meta">${meta.join('')}</div></div>`;
@@ -471,8 +470,7 @@ section { background: var(--bg); }
     if (atBottom || S.pending.length) box.scrollTop = box.scrollHeight;
   }
 
-  function askCard(m) {
-    const b = m.booking;
+  function askCard(m, b) {
     const picked = S.ask?.id === m.id ? S.ask.answers : (b.answers || {});
     const qs = (b.questions || []).map((q) => `<div class="q"><b>${esc(q.label)}</b><div class="opts">${q.options.map((o) => `<button ${b.answered ? 'disabled' : ''} class="${picked[q.key] === o.value ? 'sel' : ''}" data-ask="${esc(m.id)}" data-key="${esc(q.key)}" data-val="${esc(o.value)}">${esc(o.label)}${o.hint ? `<small>${esc(o.hint)}</small>` : ''}</button>`).join('')}</div></div>`).join('');
     const tail = b.answered ? `<div class="pill">已回答${b.typed ? `（直接打字：${esc(b.typed)}）` : ''}</div>`
@@ -620,7 +618,7 @@ section { background: var(--bg); }
     if (el.dataset.askSend) {
       const m = S.messages.get(el.dataset.askSend);
       const ans = S.ask?.id === m.id ? S.ask.answers : {};
-      const qs = m.booking.questions || [];
+      const qs = m.attachments?.find((a) => a.type === 'ask')?.questions || [];
       if (qs.some((q) => !ans[q.key])) return toast('每个问题都选一下');
       send(qs.map((q) => `${q.label}${ans[q.key]}`).join('；'), { id: m.id, answers: ans }); // App 替用户拼的那句话
     }

@@ -32,6 +32,8 @@ sandbox/chrome/
 agent-home/*
 !agent-home/config.yaml
 !agent-home/SOUL.md
+!agent-home/MAIN.md
+!agent-home/WORKER.md
 !agent-home/.env.example
 !agent-home/skills/
 agent-home/skills/*

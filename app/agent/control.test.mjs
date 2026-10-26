@@ -1,11 +1,11 @@
+// 真实 Pi SDK + 本地模拟模型：插话、停止、轮数上限都在进程内的 runtime 上验证。
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { createPiRuntime } from './pi-runtime.mjs';
-import { createPiGateway } from './pi-gateway.mjs';
+import { createRuntime, TERMINAL } from './runtime.mjs';
 
 function deferred() {
   let resolve;
@@ -39,11 +39,16 @@ function textContent(message) {
   return Array.isArray(message.content) ? message.content.filter((block) => block.type === 'text').map((block) => block.text).join('\n') : String(message.content);
 }
 
-async function fixture(t, { handle, tools = [], env = {} }) {
+const finished = (run) => new Promise((resolve) => {
+  if (TERMINAL.has(run.events.at(-1)?.event)) return resolve(run.events);
+  run.listeners.add((ev) => { if (TERMINAL.has(ev.event)) resolve(run.events); });
+});
+
+async function fixture(t, { handle, tools = [], maxTurns = 90 }) {
   const home = await mkdtemp(path.join(os.tmpdir(), 'cattuan-pi-control-'));
   const requests = [];
   const errors = [];
-  let runtime, gateway, closedBridges = 0;
+  let runtime, closedBridges = 0;
   const provider = http.createServer(async (req, res) => {
     try {
       assert.equal(req.url, '/v1/chat/completions');
@@ -59,38 +64,22 @@ async function fixture(t, { handle, tools = [], env = {} }) {
     }
   });
   t.after(async () => {
-    await gateway?.close();
     await runtime?.close();
     provider.closeAllConnections();
     if (provider.listening) await new Promise((resolve) => provider.close(resolve));
     await rm(home, { recursive: true, force: true });
   });
   await new Promise((resolve, reject) => { provider.once('error', reject); provider.listen(0, '127.0.0.1', resolve); });
-  runtime = await createPiRuntime({
-    home, env: { PI_API_URL: `http://127.0.0.1:${provider.address().port}/v1`, LONGCAT_API_KEY: 'local-only-test-key', ...env },
-    createPiTools: async () => ({ tools, close: async () => { closedBridges++; } }),
+  runtime = await createRuntime({
+    home, profiles: { worker: {
+      model: { id: 'LongCat-2.5-Preview', url: `http://127.0.0.1:${provider.address().port}/v1`, key: 'local-only-test-key', maxTokens: 1024, contextWindow: 8192, maxTurns },
+      tools: async () => ({ tools, close: async () => { closedBridges++; } }), instructions: () => '测试',
+    } },
   });
-  gateway = createPiGateway({ runtime, apiKey: 'control-key' });
-  const address = await gateway.listen({ port: 0 });
-  const url = `http://127.0.0.1:${address.port}`;
-  const post = async (route, body = {}) => fetch(`${url}${route}`, { method: 'POST',
-    headers: { Authorization: 'Bearer control-key', 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-  return {
-    runtime, requests, errors, post, get closedBridges() { return closedBridges; },
-    async run(input, sessionId) {
-      const response = await post('/v1/runs', { input, model: 'pi-agent', session_id: sessionId });
-      assert.equal(response.status, 200);
-      return (await response.json()).run_id;
-    },
-    async events(id) {
-      const response = await fetch(`${url}/v1/runs/${id}/events`, { headers: { Authorization: 'Bearer control-key' } });
-      assert.equal(response.status, 200);
-      return (await response.text()).split('\n').filter((line) => line.startsWith('data: ')).map((line) => JSON.parse(line.slice(6)));
-    },
-  };
+  return { runtime, requests, errors, get closedBridges() { return closedBridges; } };
 }
 
-test('native Pi consumes an HTTP steering request after an in-flight business tool', { timeout: 15000 }, async (t) => {
+test('native Pi consumes a steering message after an in-flight business tool', { timeout: 15000 }, async (t) => {
   const toolStarted = deferred();
   const releaseTool = deferred();
   const f = await fixture(t, {
@@ -107,24 +96,22 @@ test('native Pi consumes an HTTP steering request after an in-flight business to
       reply(res, { content: '已经按补充要求加入北京的结果。' });
     },
   });
-  const runId = await f.run('先做业务查询', 'steer-native-task');
-  const reading = f.events(runId);
+  const run = f.runtime.startRun({ input: '先做业务查询', sessionId: 'steer-native-task' });
   await toolStarted.promise;
-  const steered = await f.post(`/v1/runs/${runId}/steer`, { input: '加上北京的结果' });
-  assert.equal(steered.status, 200);
+  assert.deepEqual(await f.runtime.steer(run.id, '加上北京的结果'), { status: 'accepted' });
   releaseTool.resolve();
-  const events = await reading;
+  const events = await finished(run);
   assert.equal(events.at(-1).event, 'run.completed', JSON.stringify(events));
   assert.equal(events.at(-1).output, '已经按补充要求加入北京的结果。');
   assert.equal(events.at(-1).pending_steer, '');
-  assert.deepEqual(events.map((event) => event.event), ['tool.started', 'tool.completed', 'run.completed']);
+  assert.deepEqual(events.map((event) => event.event).filter((e) => e !== 'message.completed'), ['tool.started', 'tool.completed', 'run.completed']);
   assert.equal(f.requests.length, 2);
   assert.equal(f.closedBridges, 1);
   assert.deepEqual(f.errors, []);
-  assert.equal((await f.post(`/v1/runs/${runId}/steer`, { input: '已结束' })).status, 409);
+  await assert.rejects(f.runtime.steer(run.id, '已结束'), { statusCode: 409 });
 });
 
-test('HTTP stop aborts an active native Pi model stream and settles as cancelled', { timeout: 15000 }, async (t) => {
+test('stop aborts an active native Pi model stream and settles as cancelled', { timeout: 15000 }, async (t) => {
   const streamStarted = deferred();
   const streamClosed = deferred();
   const f = await fixture(t, {
@@ -136,16 +123,14 @@ test('HTTP stop aborts an active native Pi model stream and settles as cancelled
       // Keep the provider stream open until Pi aborts the actual HTTP request.
     },
   });
-  const runId = await f.run('等待一个慢模型', 'stop-native-task');
-  const reading = f.events(runId);
+  const run = f.runtime.startRun({ input: '等待一个慢模型', sessionId: 'stop-native-task' });
   await streamStarted.promise;
-  const stopped = await f.post(`/v1/runs/${runId}/stop`);
-  assert.equal(stopped.status, 200);
-  const events = await reading;
+  await f.runtime.stop(run.id);
+  const events = await finished(run);
   await streamClosed.promise;
   assert.equal(events.at(-1).event, 'run.cancelled', JSON.stringify(events));
   assert.ok(!events.some((event) => event.event === 'run.completed'));
-  assert.equal(f.runtime.getRun(runId).session, undefined);
+  assert.equal(f.runtime.getRun(run.id).session, undefined);
   assert.equal(f.closedBridges, 1);
   assert.equal(f.requests.length, 1);
   assert.deepEqual(f.errors, []);
@@ -154,15 +139,15 @@ test('HTTP stop aborts an active native Pi model stream and settles as cancelled
 test('native Pi stops a repeating model/tool loop at the configured turn limit', { timeout: 15000 }, async (t) => {
   let toolCalls = 0;
   const f = await fixture(t, {
-    env: { PI_MAX_TURNS: '2' },
+    maxTurns: 2,
     tools: [businessTool(async () => {
       toolCalls++;
       return { content: [{ type: 'text', text: '{"continue":true}' }] };
     })],
     handle: ({ res }) => toolCall(res),
   });
-  const runId = await f.run('持续调用业务工具', 'limit-native-task');
-  const events = await f.events(runId);
+  const run = f.runtime.startRun({ input: '持续调用业务工具', sessionId: 'limit-native-task' });
+  const events = await finished(run);
   assert.equal(events.at(-1).event, 'run.failed', JSON.stringify(events));
   assert.match(events.at(-1).error, /2 turn limit/);
   assert.equal(toolCalls, 2);

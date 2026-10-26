@@ -209,7 +209,7 @@ textarea { width: 100%; resize: vertical; font-family: ui-monospace, Menlo, mono
   let toastT;
   const toast = (t) => { $('toast').textContent = t; $('toast').classList.add('on'); clearTimeout(toastT); toastT = setTimeout(() => $('toast').classList.remove('on'), 2800); };
 
-  // 接口清单：和 app/server.mjs 的路由对应，说明见 api-docs.html
+  // 接口清单：和 app/http/routes.mjs 的路由对应，说明见 api-docs.html
   const EPS = [
     ['登录', [
       ['POST', '/api/auth/login', '登录（token:true 拿 Bearer token）', { name: '', password: '', token: true }],
