@@ -484,7 +484,7 @@ export async function knowledgeContext(ctx) {
   }
   if (enabledTools(config)({ name: 'skill_view', toolset: 'skills' })) {
     const skills = await scanSkills(ctx);
-    if (skills.length) blocks.push('可用技能（先用 skill_view 加载与当前任务相关的技能）：\n' + skills.map(s => `- ${s.name}: ${s.description}`).join('\n'));
+    if (skills.length) blocks.push('可用技能（任务明确对得上某个技能时，先用 skill_view 加载它；几个都沾边选最具体的；都对不上就不加载）：\n' + skills.map(s => `- ${s.name}: ${s.description}`).join('\n'));
   }
   return blocks.join('\n\n');
 }
