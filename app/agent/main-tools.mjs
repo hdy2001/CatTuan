@@ -48,7 +48,7 @@ export function createMainTools({ u, chatId, turn, actions }) {
       parameters: { type: 'object', properties: {
         title: { type: 'string', description: '不超过 12 个字' },
         task: { type: 'string', description: '这次让它做什么、做到什么程度、交回什么。聊天里说过的不用复述（它都看得到），写「打给刚才那家」「结果里的第 3 家」就行' },
-        skills: { type: 'array', items: STRING, description: '让它先加载的技能名（看系统提示里的技能列表），比如要深度调研就写 ["deep-research"]、要打电话就写 ["phone-call"]' },
+        skills: { type: 'array', items: STRING, description: '让它先加载的技能名（看系统提示里的技能列表）：这件事明确对得上某个技能才写，比如要打电话就写 ["phone-call"]；对不上就不写' },
         category: CATEGORY,
       }, required: ['title', 'task'] },
       async execute(_id, args) {
