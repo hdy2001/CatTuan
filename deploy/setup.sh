@@ -11,7 +11,7 @@ ENV_FILE=/etc/cattuan.env
 as_app() { sudo -u "$APP_USER" -H bash -c "cd '$DIR' && $*"; }
 [ -f "$ENV_FILE" ] && APP_DOMAIN="${APP_DOMAIN:-$(sed -n 's|^PUBLIC_ORIGIN=https://||p' "$ENV_FILE")}"
 
-echo '==> 系统软件：Caddy、sqlite3（备份用）、中文字体（不然沙箱截图是方块字）、Node.js'
+echo '==> 系统软件：Caddy、sqlite3（备份用）、中文字体（不然沙箱截图是方块字）、Node.js、Python venv（搜索服务用）'
 timedatectl set-timezone Asia/Shanghai 2>/dev/null || ln -sf /usr/share/zoneinfo/Asia/Shanghai /etc/localtime
 if ! command -v caddy >/dev/null || ! command -v sqlite3 >/dev/null; then
   apt-get update -y
@@ -21,13 +21,15 @@ node -e 'const [a, b] = process.versions.node.split(".").map(Number); process.ex
   curl -fsSL https://deb.nodesource.com/setup_26.x | bash -
   apt-get install -y nodejs
 }
+python3 -c 'import ensurepip' 2>/dev/null || { apt-get update -y; DEBIAN_FRONTEND=noninteractive apt-get install -y python3-venv; }
 
-echo "==> 运行用户 $APP_USER、依赖、沙箱的 Chromium"
+echo "==> 运行用户 $APP_USER、依赖、沙箱的 Chromium、搜索服务 DDGS"
 id "$APP_USER" >/dev/null 2>&1 || useradd --system --create-home --shell /bin/bash "$APP_USER"
 chown -R "$APP_USER:$APP_USER" "$DIR"
 as_app 'npm ci --omit=dev --prefix app && npm ci --omit=dev --prefix sandbox'
 (cd "$DIR/sandbox" && npx playwright-core install-deps chromium)
 as_app 'cd sandbox && npx playwright-core install --no-shell chromium' # 沙箱直接用完整 Chrome，不要 headless shell
+as_app 'python3 -m venv search/.venv && search/.venv/bin/pip install -q -r search/requirements.txt'
 
 echo "==> 配置：$ENV_FILE、LongCat key、Caddy"
 [ -f "$ENV_FILE" ] || cat > "$ENV_FILE" <<'EOF'
@@ -55,7 +57,7 @@ if ! grep -q '^LONGCAT_API_KEY=.' "$KEY_FILE"; then
 fi
 
 cat > /etc/caddy/Caddyfile <<EOF
-# deploy/setup.sh 生成，重跑会覆盖。App 和沙箱都只听 127.0.0.1，对外只有这里。
+# deploy/setup.sh 生成，重跑会覆盖。App、沙箱和搜索服务都只听 127.0.0.1，对外只有这里。
 ${APP_DOMAIN:-:80} {
 	encode gzip
 	# 聊天和任务进度靠 SSE 实时推，别缓冲
@@ -89,6 +91,7 @@ WantedBy=multi-user.target
 EOF
 }
 unit sandbox '喵团沙箱浏览器 :8660' "$DIR/scripts/start-sandbox.sh"
+unit search '喵团搜索服务 DDGS :4479' "$DIR/scripts/start-search.sh"
 unit app '喵团 App :3210' "$DIR/scripts/start-app.sh"
 mkdir -p /var/backups/cattuan && chown "$APP_USER:$APP_USER" /var/backups/cattuan && chmod 700 /var/backups/cattuan
 echo "0 4 * * * $APP_USER bash $DIR/deploy/backup.sh 2>&1 | logger -t cattuan-backup" > /etc/cron.d/cattuan
@@ -110,8 +113,8 @@ if [ -f /etc/systemd/system/cattuan-agents.service ]; then
 fi
 systemctl daemon-reload
 systemctl enable --now cron
-systemctl enable caddy cattuan-sandbox cattuan-app
-systemctl restart caddy cattuan-sandbox cattuan-app
+systemctl enable caddy cattuan-sandbox cattuan-search cattuan-app
+systemctl restart caddy cattuan-sandbox cattuan-search cattuan-app
 for _ in $(seq 30); do curl -fsS http://127.0.0.1:3210/api/health >/dev/null 2>&1 && break; sleep 1; done
 curl -fsS http://127.0.0.1:3210/api/health >/dev/null 2>&1 || { echo 'App 没起来，看日志：journalctl -u cattuan-app -n 50'; exit 1; }
 

@@ -6,15 +6,17 @@
 
 喵团 CatTuan 是个人助理 Web App，提供聊天、后台任务、持续目标、搜索、搜图识图和通话能力。
 
-- 技术栈：Node.js >= 22.19、JavaScript ESM（`.mjs`）、原生 HTML/CSS/JS、`node:sqlite`、Playwright。`app/` 与 `sandbox/` 各自管理 npm 依赖和锁文件，根目录没有 npm 包。
+- 技术栈：Node.js >= 22.19、JavaScript ESM（`.mjs`）、原生 HTML/CSS/JS、`node:sqlite`、Playwright。`app/` 与 `sandbox/` 各自管理 npm 依赖和锁文件，根目录没有 npm 包。唯一的 Python 是搜索服务 DDGS（`search/`，`requirements.txt` 钉死全部版本，装在 `search/.venv/`）。
 - 运行时：`app/agent/runtime.mjs` 用 Pi SDK 管理模型循环与持久化会话，一个账号一个 runtime（`app/agent/agents.mjs`），按 profile 区分主 agent（`main`）和子 agent（`worker`）；都在 App 进程里跑。
-- 主 agent：`app/agent/main.mjs` 每个聊天一个会话 `chat-<聊天 id>`，自己干活（和子 agent 同一套业务工具，不含打电话），复杂的事用 `subagent` 工具派子 agent；聊天专用工具在 `app/agent/main-tools.mjs`，每轮读到的状态块在 `app/agent/context.mjs`。
+- 主 agent：`app/agent/main.mjs` 每个聊天一个会话 `chat-<聊天 id>`，只留一两步能办完的业务工具（不打电话、不读网页），要多做几步的用 `subagent` 工具派子 agent；聊天专用工具在 `app/agent/main-tools.mjs`，每轮读到的状态块在 `app/agent/context.mjs`。
 - 子 agent：派出时把主 agent 会话复制成 `task-<任务 id>`，由 `app/agent/worker.mjs` 跑，工具和主 agent 一样，外加打电话。任务的排队、轮次、插话、停止、重启续跑在 `app/core/tasks.mjs`；目标在 `app/core/goals.mjs`。
 - 工具层：`app/agent/tools.mjs` 注册工具、应用 `config.yaml` 开关并传递取消信号和进度回调；`app/tools/` 下实现业务能力（`web`、`knowledge`、`business`、`output`），`common.mjs` 提供文件锁、原子写入和配置读写。打电话的平台规则和 Mock 外呼在 `app/calls/`。
+  - `web_search` / `web_fetch` 的后端在 `app/tools/web.mjs` 的后端表里，按 `config.yaml` 的 `web.search_backend` / `web.fetch_backend` 选（列表 = 前一个出错或没结果就用下一个）。接新的搜索或读网页服务就加一个后端函数，不要改工具的参数和返回格式。
 - App 层：`app/server.mjs` 只组装模块；`app/http/` 是登录、接口路由、上传和图片代理；`app/core/` 是每个人的状态、聊天、额度、浏览器实时画面。
 - 账号层：`app/accounts.mjs` 管理账号和登录；`app/homes.mjs` 解析每个用户的数据目录和 agent 主目录。
 - 前端：`app/public/` 直接提供静态资源（原生 ES 模块，入口 `app.js`，界面各块在 `ui/`），无前端构建步骤。沿用现有交互、移动端适配与视觉样式。
 - 浏览器服务：`sandbox/server.mjs` 用无头浏览器提供网页搜索、读网页和实时画面回放。
+- 搜索服务：`scripts/start-search.sh` 起 DDGS 自带的 `ddgs api`（`127.0.0.1:4479`），是 `web_search` 的默认后端；没起来时自动回退到沙箱浏览器。
 - agent 的人设和做事规矩在 `agent-home/SOUL.md`（共用）、`MAIN.md`（主 agent）、`WORKER.md`（子 agent），业务技能在 `agent-home/skills/cattuan/`。本文件是开发指引，不代替产品 agent 的人设。
 
 ## 技术方向与接口约束
@@ -48,6 +50,7 @@
 # 安装各服务依赖
 npm ci --prefix app
 npm ci --prefix sandbox
+python3 -m venv search/.venv && search/.venv/bin/pip install -r search/requirements.txt
 
 # 首次配置：仅在 agent-home/.env 不存在时复制并填写模型凭据
 test -f agent-home/.env || cp agent-home/.env.example agent-home/.env
@@ -60,6 +63,7 @@ scripts/start.sh
 # 已在运行时，等待后台任务空闲再重启指定服务
 scripts/restart.sh app
 scripts/restart.sh sandbox
+scripts/restart.sh search
 # scripts/restart.sh all [最长等待秒数，默认 600]
 
 # 老数据转新格式（先停 App；可重复执行，先备份到 app/data/backups/；--dry-run 只看不改）
@@ -75,10 +79,10 @@ node --test app/agent/main.test.mjs app/e2e.test.mjs
 curl --fail --silent --show-error http://127.0.0.1:3210/api/health
 ```
 
-- 默认 App 地址 `http://localhost:3210`，浏览器服务 `:8660`。
+- 默认 App 地址 `http://localhost:3210`，浏览器服务 `:8660`，搜索服务 `:4479`。
 - App 健康响应的 `executorRuntime` 应为 `pi`。健康响应只证明服务状态，不能替代实际任务链路测试。
-- 关键配置都在 `app/config.mjs` 里读：`LONGCAT_API_KEY`；子 agent 的 `PI_MODEL`、`PI_API_URL`、`PI_API_KEY`、`PI_MAX_TURNS`；主 agent 的 `DISPATCH_MODEL`、`DISPATCH_API_URL`、`DISPATCH_MAX_TURNS`；`CATTUAN_DATA_DIR`、`CATTUAN_SANDBOX_URL`。示例见 `agent-home/.env.example`；线上配置是 `deploy/setup.sh` 生成的 `/etc/cattuan.env`。
-- 本地日志通常为 `app/data/server.out`、`sandbox/server.out`，App 数据目录可由 `CATTUAN_DATA_DIR` 覆盖；查看时注意隐藏凭据和用户内容。
+- 关键配置都在 `app/config.mjs` 里读：`LONGCAT_API_KEY`；子 agent 的 `PI_MODEL`、`PI_API_URL`、`PI_API_KEY`、`PI_MAX_TURNS`、`PI_TIMEOUT_MS`、`PI_THINKING`；主 agent 的 `DISPATCH_MODEL`、`DISPATCH_API_URL`、`DISPATCH_MAX_TURNS`、`DISPATCH_TIMEOUT_MS`、`DISPATCH_THINKING`；`CATTUAN_DATA_DIR`、`CATTUAN_SANDBOX_URL`、`DDGS_URL`（搜索服务地址；服务端口用 `SEARCH_PORT` 换）、`SEARCH_PROXY`。示例见 `agent-home/.env.example`；线上配置是 `deploy/setup.sh` 生成的 `/etc/cattuan.env`。
+- 本地日志通常为 `app/data/server.out`、`sandbox/server.out`、`search/server.out`，App 数据目录可由 `CATTUAN_DATA_DIR` 覆盖；查看时注意隐藏凭据和用户内容。
 
 ## 修改与验收
 

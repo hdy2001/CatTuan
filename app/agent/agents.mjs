@@ -1,5 +1,5 @@
 // 每个账号一个 Pi runtime，两种 profile：
-//   main   主 agent（聊天里的喵团）：快、回复短；干活的工具和子 agent 一样（不含打电话），再加聊天专用工具（main-tools.mjs）
+//   main   主 agent（聊天里的喵团）：快、回复短；只留一两步能办完的工具（不打电话、不读网页），再加聊天专用工具（main-tools.mjs）
 //   worker 子 agent（后台任务、目标检查）：多做几步，工具全套
 // 会话都在这个人的 <home>/pi/sessions 下：chat-<聊天 id> / task-<任务 id>。派子 agent 时把聊天会话复制一份当任务会话。
 import fs from 'node:fs';
@@ -40,7 +40,8 @@ export function createAgents({ config, services = () => ({}), createRuntime: mak
     };
     return {
       main: {
-        model: config.models.main, tools: toolsFor('main', ['phone']), // 打电话要几分钟，这段时间主 agent 回不了消息：交给子 agent
+        // 打电话、读网页都要好几步或好几分钟，这段时间主 agent 回不了消息：交给子 agent
+        model: config.models.main, tools: toolsFor('main', ['phone', 'web_fetch', 'read_webpage']),
         instructions: (bridge) => [readPrompt(u.home, 'SOUL.md'), readPrompt(u.home, 'MAIN.md'), bridge.systemPrompt].filter(Boolean).join('\n\n'),
       },
       worker: {

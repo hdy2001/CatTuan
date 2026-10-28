@@ -27,6 +27,9 @@ sandbox/shots/
 sandbox/node_modules/
 sandbox/chrome/
 
+# ---- 搜索服务：Python 虚拟环境（search/requirements.txt 装出来的） ----
+search/.venv/
+
 # ---- Agent 主目录：只放项目配置和技能（白名单），其余都是运行时数据 ----
 # 聊天数据库、记忆（用户画像）、日志、缓存、自动装的技能都不进仓库
 agent-home/*

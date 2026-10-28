@@ -100,10 +100,11 @@ test('network tools propagate cancellation and keep later calls usable', async (
   const server = http.createServer((_req, _res) => entered());
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   t.after(() => { server.closeAllConnections(); server.close(); });
-  const bridge = await createTools({ home, sessionId: 'task-t_abort', env: { CATTUAN_SANDBOX_URL: 'http://127.0.0.1:' + server.address().port } });
+  const hanging = 'http://127.0.0.1:' + server.address().port;
+  const bridge = await createTools({ home, sessionId: 'task-t_abort', env: { CATTUAN_SANDBOX_URL: hanging, DDGS_URL: hanging } });
   t.after(() => bridge.close());
   const controller = new AbortController();
-  const pending = invoke(bridge, 'deep_web_search', { query: 'test' }, controller.signal);
+  const pending = invoke(bridge, 'web_search', { query: 'test' }, controller.signal);
   const rejected = assert.rejects(pending, { name: 'AbortError' });
   await requested;
   controller.abort();

@@ -44,7 +44,7 @@ const finished = (run) => new Promise((resolve) => {
   run.listeners.add((ev) => { if (TERMINAL.has(ev.event)) resolve(run.events); });
 });
 
-async function fixture(t, { handle, tools = [], maxTurns = 90 }) {
+async function fixture(t, { handle, tools = [], maxTurns = 90, timeoutMs, thinking }) {
   const home = await mkdtemp(path.join(os.tmpdir(), 'cattuan-pi-control-'));
   const requests = [];
   const errors = [];
@@ -72,7 +72,7 @@ async function fixture(t, { handle, tools = [], maxTurns = 90 }) {
   await new Promise((resolve, reject) => { provider.once('error', reject); provider.listen(0, '127.0.0.1', resolve); });
   runtime = await createRuntime({
     home, profiles: { worker: {
-      model: { id: 'LongCat-2.5-Preview', url: `http://127.0.0.1:${provider.address().port}/v1`, key: 'local-only-test-key', maxTokens: 1024, contextWindow: 8192, maxTurns },
+      model: { id: 'LongCat-2.5-Preview', url: `http://127.0.0.1:${provider.address().port}/v1`, key: 'local-only-test-key', maxTokens: 1024, contextWindow: 8192, maxTurns, ...(timeoutMs && { timeoutMs }), ...(thinking && { thinking }) },
       tools: async () => ({ tools, close: async () => { closedBridges++; } }), instructions: () => '测试',
     } },
   });
@@ -154,4 +154,41 @@ test('native Pi stops a repeating model/tool loop at the configured turn limit',
   assert.equal(f.requests.length, 2, 'The over-limit turn must be aborted before another HTTP model request');
   assert.equal(f.closedBridges, 1);
   assert.deepEqual(f.errors, []);
+});
+
+test('a model request that never starts answering times out and is retried once', { timeout: 15000 }, async (t) => {
+  // 第一次请求一直不回（LongCat 偶尔会这样挂住），第二次正常回答
+  const f = await fixture(t, { timeoutMs: 400, handle: ({ res, requests }) => { if (requests.length > 1) reply(res, { content: '第二次回来了。' }); } });
+  const run = f.runtime.startRun({ input: '在吗', sessionId: 'timeout-retry-task' });
+  const events = await finished(run);
+  assert.equal(events.at(-1).event, 'run.completed', JSON.stringify(events));
+  assert.equal(events.at(-1).output, '第二次回来了。');
+  assert.equal(f.requests.length, 2);
+});
+
+test('a model that keeps hanging fails after one retry instead of waiting minutes', { timeout: 15000 }, async (t) => {
+  const f = await fixture(t, { timeoutMs: 300, handle: () => {} });
+  const started = Date.now();
+  const run = f.runtime.startRun({ input: '在吗', sessionId: 'timeout-fail-task' });
+  const events = await finished(run);
+  assert.equal(events.at(-1).event, 'run.failed', JSON.stringify(events));
+  assert.match(events.at(-1).error, /time/i);
+  assert.equal(f.requests.length, 2);
+  assert.ok(Date.now() - started < 10000);
+});
+
+test('with thinking on, the request enables LongCat thinking and the reasoning stays out of the returned text', { timeout: 15000 }, async (t) => {
+  const f = await fixture(t, { thinking: true, handle: ({ res }) => {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    res.write(chunk({ role: 'assistant', reasoning_content: '用户问 17×23，先算一下：17×20=340，17×3=51。' }));
+    res.write(chunk({ content: '391' }));
+    res.write(chunk({}, 'stop'));
+    res.end('data: [DONE]\n\n');
+  } });
+  const run = f.runtime.startRun({ input: '17*23 等于多少', sessionId: 'thinking-task' });
+  const events = await finished(run);
+  assert.deepEqual(f.requests[0].thinking, { type: 'enabled' });
+  assert.equal(events.at(-1).event, 'run.completed', JSON.stringify(events));
+  assert.equal(events.at(-1).output, '391');
+  assert.ok(events.filter((e) => e.event === 'message.completed').every((e) => !e.text.includes('先算一下')), 'reasoning never leaks into messages');
 });

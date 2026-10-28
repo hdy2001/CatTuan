@@ -43,9 +43,11 @@ async function setup(reply) {
       respond(res, out);
     } catch (e) { res.writeHead(500); res.end(e.message); }
   });
-  const sandbox = http.createServer((req, res) => res.end(JSON.stringify({ results: [{ title: `${new URL(req.url, 'http://x').searchParams.get('q')} 官网`, url: 'https://example.com/a', snippet: '营业到 22 点' }] })));
+  // 同时当沙箱和 DDGS 用：q 是沙箱的参数，query 是 DDGS 的
+  const sandbox = http.createServer((req, res) => { const p = new URL(req.url, 'http://x').searchParams; res.end(JSON.stringify({ results: [{ title: `${p.get('q') || p.get('query')} 官网`, url: 'https://example.com/a', snippet: '营业到 22 点' }] })); });
   const model = { id: 'LongCat-2.5-Preview', url: `${await listen(provider)}/v1`, key: 'fake', maxTokens: 512, contextWindow: 8192, maxTurns: 6 };
-  const env = { CATTUAN_SANDBOX_URL: await listen(sandbox) };
+  const sandboxUrl = await listen(sandbox);
+  const env = { CATTUAN_SANDBOX_URL: sandboxUrl, DDGS_URL: sandboxUrl };
   const agents = createAgents({ config: { env, models: { main: model, worker: model } } });
   const tasks = [];
   const goals = [];
@@ -121,7 +123,7 @@ test('a second message sent while the first turn is thinking joins that turn', {
 test('the main agent searches by itself, answers directly and records what it did', { timeout: 30000 }, async () => {
   const s = await setup((body) => (body.messages.at(-1).role === 'tool'
     ? { text: '蓝果中古营业到晚上 10 点。' }
-    : { text: '我查查～', tools: [['deep_web_search', { query: '蓝果中古首饰' }]] }));
+    : { text: '我查查～', tools: [['web_search', { query: '蓝果中古首饰' }]] }));
   try {
     const U1 = await s.user('u1');
     await s.main.userMessage(U1, 'c1', { text: '你知道蓝果中古首饰吗' });
@@ -163,8 +165,8 @@ test('the main agent gets work tools and chat tools but cannot place calls itsel
     await s.main.userMessage(U1, 'c1', { text: '帮我约美甲' });
     await s.ended();
     const names = s.requests[0].tools.map((t) => t.function.name);
-    for (const name of ['deep_web_search', 'image_search', 'attach', 'subagent', 'ask_user', 'create_goal']) assert.ok(names.includes(name), name);
-    for (const name of ['phone_call', 'goal_update']) assert.ok(!names.includes(name), name);
+    for (const name of ['web_search', 'image_search', 'attach', 'subagent', 'ask_user', 'create_goal']) assert.ok(names.includes(name), name);
+    for (const name of ['phone_call', 'web_fetch', 'read_webpage', 'goal_update']) assert.ok(!names.includes(name), name);
     assert.equal(s.posted.length, 1);
     assert.equal(s.posted[0].text, '还差时间～');
     assert.deepEqual(s.posted[0].attachments[0].questions.map((q) => q.options.map((o) => o.label)), [['下午三点', '晚上七点']]);
@@ -205,6 +207,17 @@ test('a model failure falls back to a short apology', { timeout: 30000 }, async 
     await s.main.userMessage(U1, 'c1', { text: '在吗' });
     await s.ended();
     assert.equal(s.posted.at(-1).text, '我这边网络有点卡，等下再说一次？');
+    assert.equal(s.acts[0].status, 'failed');
+  } finally { await s.close(); }
+});
+
+test('a model failure after "let me check" still tells the user instead of going silent', { timeout: 30000 }, async () => {
+  const s = await setup((body) => (body.messages.at(-1).role === 'tool' ? { status: 500 } : { text: '我查查～', tools: [['web_search', { query: '望京 网球场' }]] }));
+  try {
+    const U1 = await s.user('u1');
+    await s.main.userMessage(U1, 'c1', { text: '望京附近有什么网球场吗' });
+    await s.ended();
+    assert.deepEqual(s.posted.map((m) => m.text), ['我查查～', '我这边网络有点卡，等下再说一次？']);
     assert.equal(s.acts[0].status, 'failed');
   } finally { await s.close(); }
 });

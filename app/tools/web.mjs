@@ -4,6 +4,7 @@ import http from 'node:http';
 import https from 'node:https';
 import { isIP } from 'node:net';
 import { tool } from './common.mjs';
+import { htmlToMarkdown, pageOf, unescapeHtml } from './extract.mjs';
 import { clip, hostOf } from '../core/util.mjs';
 
 const object = (properties, required = []) => ({ type: 'object', properties, ...(required.length ? { required } : {}) });
@@ -124,15 +125,6 @@ export async function fetchPublic(input, { signal, maxBytes = 200000, timeoutMs 
 }
 
 const SHOP_HOSTS = ['taobao.', 'tmall.', 'jd.com', 'pinduoduo.', 'yangkeduo.', 'goofish.', 'xianyu', 'bunjang.', 'mercari', 'amazon.', 'ebay.', 'aliexpress.', 'rakuten.', 'coupang.', 'shopee.', 'temu.', '1688.com', 'suruga-ya', 'auctions.yahoo', 'joom.', 'etsy.', 'nin-nin-game.', 'play-asia.', 'amiami.', 'hlj.com', 'solarisjapan.', 'mandarake.', 'goodsmile.', 'tokyootakumode.', 'booth.pm', 'danbooru.', 'gelbooru.', 'safebooru.', 'yande.re', 'konachan.', 'rule34', 'e621.', 'sankakucomplex.'];
-function unescapeHtml(input) {
-  const named = { amp: '&', quot: '"', apos: "'", lt: '<', gt: '>', nbsp: ' ' };
-  return String(input || '').replace(/&(#x[0-9a-f]+|#\d+|amp|quot|apos|lt|gt|nbsp);/gi, (whole, code) => {
-    if (!code.startsWith('#')) return named[code.toLowerCase()] ?? whole;
-    const n = code[1].toLowerCase() === 'x' ? parseInt(code.slice(2), 16) : Number(code.slice(1));
-    return n >= 0 && n <= 0x10ffff && !(n >= 0xd800 && n <= 0xdfff) ? String.fromCodePoint(n) : '';
-  });
-}
-
 export function parseImages(html, query) {
   const out = [];
   for (const match of html.matchAll(/class=["']iusc["'][^>]*?\sm="([^"]+)"/g)) {
@@ -149,27 +141,88 @@ export function parseImages(html, query) {
   return out;
 }
 
+// 搜索和读网页的后端：config.yaml 的 web.search_backend / web.fetch_backend 按名字选。写成列表时，前一个出错或没结果就用下一个。
+// 加一个后端 = 在 createWebTools 的表里加一个函数，返回同样的格式；要 key 的从 ctx.env 读。
+const DEFAULT_BACKENDS = { search: ['ddgs', 'browser'], fetch: ['http'] };
+// 不少网站拦明显不是浏览器的请求，读网页时用普通浏览器的请求头
+const BROWSER_HEADERS = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36', Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7', 'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8' };
+
 export function createWebTools(ctx) {
-  const sandbox = async (endpoint, params = {}, signal, timeoutMs = 120000) => {
-    const url = new URL(endpoint, ctx.env?.CATTUAN_SANDBOX_URL || 'http://127.0.0.1:8660');
-    for (const [key, value] of Object.entries(params)) url.searchParams.set(key, String(value));
-    // 带上任务编号：App 按它把沙箱的实时画面推给任务的主人
-    const response = await fetch(url, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs), headers: ctx.taskId ? { 'x-cattuan-task': ctx.taskId } : {} });
+  // GET 本机服务（沙箱、DDGS）的 JSON：有超时、大小上限，跟着取消
+  const getJson = async (url, signal, timeoutMs, headers = {}) => {
+    const response = await fetch(url, { signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs), headers });
     const chunks = [];
     let size = 0;
     for await (const chunk of response.body || []) {
       size += chunk.length;
-      if (size > 4 * 1024 * 1024) throw new Error('沙箱响应超过大小限制');
+      if (size > 4 * 1024 * 1024) throw new Error('响应超过大小限制');
       chunks.push(chunk);
     }
     try { return cleanData(JSON.parse(Buffer.concat(chunks).toString('utf8'))); }
-    catch (err) { abort(signal); throw new Error(`沙箱返回了 ${response.status}`, { cause: err }); }
+    catch (err) { abort(signal); throw new Error(`${url.host} 返回了 ${response.status}`, { cause: err }); }
+  };
+  const sandbox = async (endpoint, params = {}, signal, timeoutMs = 120000) => {
+    const url = new URL(endpoint, ctx.env?.CATTUAN_SANDBOX_URL || 'http://127.0.0.1:8660');
+    for (const [key, value] of Object.entries(params)) url.searchParams.set(key, String(value));
+    // 带上任务编号：App 按它把沙箱的实时画面推给任务的主人
+    return getJson(url, signal, timeoutMs, ctx.taskId ? { 'x-cattuan-task': ctx.taskId } : {});
   };
   const wrap = (fn, prefix = '') => async (args, signal) => {
     abort(signal);
     try { return await fn(args || {}, signal); }
     catch (err) { abort(signal); return { error: `${prefix}${errorText(err)}` }; }
   };
+
+  // 搜索后端：({ query, limit }) → { results: [{ title, url, snippet }] }
+  const searchBackends = {
+    // 本机的 DDGS 服务（scripts/start-search.sh）：免费、不要 key，自己在几个搜索引擎之间轮换。
+    // 它背后的引擎时不时被限流，同一个词再搜一次常常就有了，所以失败了先重试一次
+    async ddgs({ query, limit }, signal) {
+      const url = new URL('/search/text', ctx.env?.DDGS_URL || 'http://127.0.0.1:4479');
+      url.search = new URLSearchParams({ query, max_results: limit, region: 'wt-wt' });
+      for (let attempt = 1; ; attempt++) {
+        const data = await getJson(url, signal, 30000);
+        if (!data.detail) return { results: (data.results || []).map((r) => ({ title: r.title || '', url: r.href || r.url || '', snippet: r.body || '' })) };
+        if (attempt < 2) continue;
+        if (/no results found/i.test(String(data.detail))) return { results: [] };
+        throw new Error(typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail));
+      }
+    },
+    // 沙箱的真实浏览器里搜必应：慢，要排队，但有实时画面
+    async browser({ query }, signal) {
+      const data = await sandbox('/web/search', { q: query }, signal);
+      if (data.error) throw new Error(data.message || data.error);
+      return { results: data.results || [] };
+    },
+  };
+  // 读网页后端：({ url }) → { url, status, contentType, title, text }
+  const fetchBackends = {
+    // 直接 HTTP 抓（不跑脚本）：HTML 提取正文转成 Markdown，JSON 和纯文本原样返回
+    async http({ url }, signal) {
+      const response = await fetchPublic(url, { signal, maxBytes: 20_000_000, timeoutMs: 30000, headers: BROWSER_HEADERS }); // SEC 的招股书这类文件有十几 MB
+      if (response.status >= 400) throw new Error(`网页返回 ${response.status}${[401, 403, 429].includes(response.status) ? '（可能不让非浏览器访问，可以试 read_webpage）' : ''}`);
+      const contentType = response.headers.get('content-type') || '';
+      if (!/json|text|xml|javascript/i.test(contentType)) throw new Error(`不是文本内容（${contentType || '未知类型'}）`);
+      const page = /html/i.test(contentType) ? htmlToMarkdown(response.text, response.url) : { title: '', text: response.text };
+      return { url: response.url, status: response.status, contentType, ...page };
+    },
+  };
+  const pages = new Map(); // web_fetch 最近读过的几个网页：网址 → 提取好的正文
+  const backendNames = (kind) => [ctx.config?.().web?.[`${kind}_backend`] ?? DEFAULT_BACKENDS[kind]].flat().map(String);
+  // 按配置依次试后端：出错或没有用的结果就换下一个；都出错时报最后一个错
+  const viaBackends = async (kind, table, args, signal, useful) => {
+    let out = null, failure = null;
+    for (const name of backendNames(kind)) {
+      try {
+        if (!Object.hasOwn(table, name)) throw new Error(`没有叫 ${name} 的后端`);
+        out = await table[name](args, signal);
+        if (useful(out)) return out;
+      } catch (err) { abort(signal); failure = err; }
+    }
+    if (out) return out;
+    throw failure;
+  };
+
   const searchImages = async (queries, days, offset, signal) => {
     const batches = await Promise.all(queries.map(async (query) => {
       const params = new URLSearchParams({ q: query, first: Math.max(0, offset) + 1, count: 35, mmasync: 1, adlt: 'strict', qft: `+filterui:age-lt${Math.max(1, days) * 1440}` });
@@ -182,8 +235,8 @@ export function createWebTools(ctx) {
     return merged.slice(0, 30);
   };
   return [
-    tool('deep_web_search', 'web', {
-      label: '网页搜索', usesBrowser: true,
+    tool('web_search', 'web', {
+      label: '网页搜索', usesBrowser: backendNames('search').includes('browser'),
       describe: (a) => {
         const act = `搜「${clip(a.query, 40)}」`;
         return { act, done: (o) => {
@@ -192,23 +245,55 @@ export function createWebTools(ctx) {
             detail: rs.length ? rs.slice(0, 4).map((r) => `${clip(r.title, 40)} · ${hostOf(r.url)}`).join('\n') : o.hint };
         } };
       },
-      description: '用必应搜网页（在真实浏览器里搜，中文结果好），返回标题、网址和摘要；摘要不够就用 read_webpage 读原文。问到具体的店、品牌、产品、人物、事件、价格、地址、营业时间、新闻时，先用它查，不要凭记忆答。深度搜索时多换几个角度的关键词：官方说法、对比、评测、时间范围、反方观点。',
-      parameters: object({ query: str('搜索词') }, ['query']),
-    }, wrap(async ({ query = '' }, signal) => {
+      description: '搜网页，返回标题、网址和摘要（默认 5 条）。摘要不够时用 web_fetch 读原文。',
+      parameters: object({ query: str('搜索词'), limit: { type: 'integer', description: '要几条结果，1–10，默认 5' } }, ['query']),
+    }, wrap(async ({ query = '', limit }, signal) => {
       query = query.trim();
       if (!query) return { error: 'query 不能为空' };
-      const data = await sandbox('/web/search', { q: query }, signal);
-      if (data.error) return { error: data.message || data.error };
-      const results = (data.results || []).map((result, i) => ({ n: i + 1, ...result }));
-      return { query, results, ...(!results.length ? { hint: '没搜到，换个说法再试' } : {}) };
-    }, '沙箱不可用：')),
+      limit = Math.min(10, Math.max(1, integer(limit, 5)));
+      const { results } = await viaBackends('search', searchBackends, { query, limit }, signal, (o) => o.results?.length > 0);
+      const list = results.filter((r) => r.url && r.title).slice(0, limit).map((r, i) => ({ n: i + 1, title: r.title, url: r.url, snippet: clip(r.snippet || '', 300) }));
+      return { query, results: list, ...(!list.length ? { hint: '没搜到，换个说法再试' } : {}) };
+    }, '搜索失败：')),
+    tool('web_fetch', 'web', {
+      label: '读网页',
+      describe: (a) => ({ act: `读 ${hostOf(a.url)}${a.find ? `里的「${clip(a.find, 20)}」` : ''}`, detail: a.url, done: (o) => (o.text
+        ? { title: `读了「${clip(o.title || hostOf(o.url || a.url), 28)}」`, detail: [o.url || a.url, o.length > o.text.length ? `读了第 ${o.offset}–${o.offset + o.text.length} 字，全文约 ${o.length} 字` : `读到约 ${o.length} 字`, o.note].filter(Boolean).join('\n') }
+        : { title: `读 ${hostOf(a.url)}，没读到内容`, detail: [a.url, o.note || o.error].filter(Boolean).join('\n'), ok: false }) }),
+      description: '读一个公开网址（只 GET，不跑页面脚本）：网页提取正文转成 Markdown，JSON 和纯文本原样返回。一次最多返回 max_chars 字，长文用返回的 next_offset 接着读，或者用 find 直接跳到含某段文字的地方（比如章节标题）。读不到正文（靠脚本加载、要登录）时用 read_webpage 在浏览器里打开。不能访问内网。',
+      parameters: object({
+        url: str('http(s) 网址'),
+        max_chars: { type: 'integer', description: '最多返回多少字，默认 12000' },
+        offset: { type: 'integer', description: '从第几个字开始读（上次返回的 next_offset），默认 0' },
+        find: str('跳到 offset 之后第一次出现这段文字的地方（不分大小写）'),
+      }, ['url']),
+    }, wrap(async ({ url = '', max_chars, offset, find = '' }, signal) => {
+      url = url.trim();
+      if (!url) return { error: 'url 不能为空' };
+      const max = Math.min(40000, Math.max(2000, integer(max_chars, 12000)));
+      // 同一个网址翻页时不重新下载、重新提取（大文档提取一次要好几秒）
+      let page = pages.get(url);
+      if (!page || Date.now() - page.at > 15 * 60_000) {
+        page = { at: Date.now(), ...(await viaBackends('fetch', fetchBackends, { url }, signal, (o) => o.text?.trim().length > 0)) };
+        pages.delete(url);
+        pages.set(url, page);
+        for (const key of [...pages.keys()].slice(0, -4)) pages.delete(key);
+      }
+      const text = String(page.text || '');
+      const part = pageOf(text, { offset: integer(offset, 0), find: String(find).trim(), max });
+      return { url: page.url || url, status: page.status, content_type: page.contentType, title: page.title || '', offset: part.start, length: text.length, text: part.text,
+        ...(part.end < text.length && part.text && { next_offset: part.end }),
+        ...(part.matches !== undefined && { matches: part.matches }),
+        ...(find && !part.matches && { note: `没找到「${find}」` }),
+        ...(!find && text.trim().length < 200 && /html/i.test(page.contentType || '') && { note: '没读到多少正文（可能靠脚本加载或要登录），可以用 read_webpage 在浏览器里打开' }) };
+    }, '打不开：')),
     tool('read_webpage', 'web', {
-      label: '读网页', usesBrowser: true,
+      label: '用浏览器读网页', usesBrowser: true,
       describe: (a) => ({ act: `打开 ${hostOf(a.url)}`, detail: a.url, done: (o) => (o.text
         ? { title: `读了「${clip(o.title || hostOf(o.url || a.url), 28)}」`, detail: [o.url || a.url, `读到约 ${o.text.length} 字${o.truncated ? '（很长，只读了前面）' : ''}`, o.note].filter(Boolean).join('\n') }
         : { title: `打开 ${hostOf(a.url)}，没读到内容`, detail: [a.url, o.note].filter(Boolean).join('\n'), ok: false }) }),
-      description: '打开一个网页读正文（在真实浏览器里打开，能读靠脚本渲染的页面）。不会下载文件（PDF、压缩包等会被拒），不能登录、不能访问内网。返回标题和正文；读不到正文时 note 会说明原因，换个来源。',
-      parameters: object({ url: str('网页地址（通常来自 deep_web_search 的结果）') }, ['url']),
+      description: '在真实浏览器里打开网页读正文，能读靠脚本渲染的页面，比 web_fetch 慢。不会下载文件（PDF、压缩包等会被拒），不能登录、不能访问内网。返回标题和正文；读不到正文时 note 会说明原因，换个来源。',
+      parameters: object({ url: str('网页地址') }, ['url']),
     }, wrap(async ({ url = '' }, signal) => {
       url = url.trim();
       if (!url) return { error: 'url 不能为空' };
@@ -235,18 +320,5 @@ export function createWebTools(ctx) {
       for (const photo of photos) ctx.media?.set(photo.id, photo); // attach 按 id 取
       return photos.length ? { queries, days, photos } : { queries, photos: [], hint: '没有结果，换个更短的关键词（比如只用名字）' };
     }, '搜索失败：')),
-    tool('fetch_url', 'web', {
-      label: '读网址',
-      describe: (a) => ({ act: `读网址 ${hostOf(a.url)}`, detail: a.url }),
-      description: '只读地打开一个公开网址（GET），返回正文文本或 JSON（最多约 1.2 万字）。给技能用：查天气（wttr.in?format=j2）、汇率、公开 API、文章正文。不能访问内网地址，不能提交表单或登录。不要用它抓社媒平台。',
-      parameters: object({ url: str('http(s) 网址') }, ['url']),
-    }, wrap(async ({ url = '' }, signal) => {
-      const response = await fetchPublic(url.trim(), { signal });
-      const contentType = response.headers.get('content-type') || '';
-      if (!/json|text|xml|javascript/i.test(contentType)) return { error: `不是文本内容（${contentType || '未知类型'}）` };
-      let text = response.text;
-      if (/html/i.test(contentType)) text = unescapeHtml(text.replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, ' ').replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ');
-      return { status: response.status, content_type: contentType, text: text.slice(0, 12000) };
-    }, '打不开：')),
   ];
 }

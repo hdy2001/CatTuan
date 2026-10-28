@@ -1,6 +1,6 @@
 # 部署
 
-一台 Ubuntu 24.04 服务器，用 root 操作。4 核 8G 大约够 10 个人用。App（主 agent 和子 agent 都在 App 进程里）和沙箱浏览器都只监听 127.0.0.1，对外只有 Caddy 的 80 / 443 端口。
+一台 Ubuntu 24.04 服务器，用 root 操作。4 核 8G 大约够 10 个人用。App（主 agent 和子 agent 都在 App 进程里）、沙箱浏览器和搜索服务 DDGS 都只监听 127.0.0.1，对外只有 Caddy 的 80 / 443 端口。
 
 ## 首次部署
 
@@ -32,7 +32,7 @@ cd /srv/cattuan && sudo -u cattuan git pull && bash deploy/setup.sh
 | 做什么 | 怎么做 |
 | --- | --- |
 | 账号 | `sudo -u cattuan node scripts/user.mjs add\|passwd\|list\|disable\|enable <名字>` |
-| 日志 | `journalctl -u cattuan-app -f`（`cattuan-sandbox` 同理） |
+| 日志 | `journalctl -u cattuan-app -f`（`cattuan-sandbox`、`cattuan-search` 同理） |
 | 配置 | 额度、注册开关在 `/etc/cattuan.env`，模型 key 在 `agent-home/.env`，改完执行 `systemctl restart cattuan-app` |
 | 备份 | 每天 04:00 自动备份到 `/var/backups/cattuan/`，保留 14 天。手动备份：`sudo -u cattuan bash deploy/backup.sh` |
 | 恢复 | 1. `systemctl stop cattuan-app`<br>2. 解开备份包，用里面的 `data/` 覆盖 `app/data/`，`agent-home/` 覆盖 `agent-home/`<br>3. `chown -R cattuan:cattuan /srv/cattuan`<br>4. `systemctl start cattuan-app` |

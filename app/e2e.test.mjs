@@ -77,7 +77,7 @@ async function stack(script, env = {}) {
   const appUrl = `http://127.0.0.1:${appPort}`;
   const log = [];
   const appEnv = { PATH: process.env.PATH, HOME: process.env.HOME, TZ: process.env.TZ || 'Asia/Shanghai',
-    CATTUAN_DATA_DIR: dir, CATTUAN_SANDBOX_URL: sandboxUrl, LONGCAT_API_KEY: 'fake-e2e-key', CALL_SPEED: '0',
+    CATTUAN_DATA_DIR: dir, CATTUAN_SANDBOX_URL: sandboxUrl, DDGS_URL: sandboxUrl, LONGCAT_API_KEY: 'fake-e2e-key', CALL_SPEED: '0',
     PORT: String(appPort), DISPATCH_API_URL: modelUrl, PI_API_URL: modelUrl, PI_MAX_TURNS: '8', ...env };
 
   // 账号：直接写库，建好主目录（和 scripts/user.mjs add 一样）
@@ -157,7 +157,7 @@ test('e2e: chat, subagent with a document, steering, stop and account isolation'
       return { text: '慢任务结束' };
     }
     if (anyText(body, 'E2E-STEER')) {
-      if (!afterTool(body)) { await steerGate; return { tools: [['deep_web_search', { query: '北京' }]] }; }
+      if (!afterTool(body)) { await steerGate; return { tools: [['web_search', { query: '北京' }]] }; }
       return { text: anyText(body, '换成上海') ? '已按要求换成上海。' : '没看到插话' };
     }
     if (!afterTool(body)) return { tools: [['attach', { document: { title: '望京咖啡店', body: '## 结论\nManner 最安静 [1]', sources: [{ title: '点评', url: 'https://example.com/r' }] } }]] };

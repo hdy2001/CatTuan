@@ -36,14 +36,20 @@ export function loadConfig(processEnv = process.env) {
       goalMinEvery: num('QUOTA_GOAL_MIN_EVERY', 60),
     },
     // 主 agent（聊天）要快、要能看图；子 agent（后台任务、目标检查）可以慢一点、多做几步
+    // 两边默认都先思考再回话或调工具；思考也算输出 token，所以输出上限要留够
     models: {
       main: {
         id: env.DISPATCH_MODEL || 'LongCat-2.5-Preview', url: env.DISPATCH_API_URL || LONGCAT_URL, key: env.DISPATCH_API_KEY || longcatKey,
-        maxTurns: num('DISPATCH_MAX_TURNS', 10), maxTokens: num('DISPATCH_MAX_TOKENS', 1024), contextWindow: num('PI_CONTEXT_WINDOW', 128000),
+        maxTurns: num('DISPATCH_MAX_TURNS', 10), maxTokens: num('DISPATCH_MAX_TOKENS', 8192), contextWindow: num('PI_CONTEXT_WINDOW', 128000),
+        // 模型多久没开始回就算超时（只管到开始回为止，长回答不受影响），超时重试一次；聊天里不能让用户干等
+        timeoutMs: num('DISPATCH_TIMEOUT_MS', 60000),
+        thinking: env.DISPATCH_THINKING !== '0',
       },
       worker: {
         id: env.PI_MODEL || 'LongCat-2.5-Preview', url: env.PI_API_URL || LONGCAT_URL, key: env.PI_API_KEY || longcatKey,
-        maxTurns: num('PI_MAX_TURNS', 90), maxTokens: num('PI_MAX_TOKENS', 8192), contextWindow: num('PI_CONTEXT_WINDOW', 128000),
+        maxTurns: num('PI_MAX_TURNS', 90), maxTokens: num('PI_MAX_TOKENS', 16384), contextWindow: num('PI_CONTEXT_WINDOW', 128000),
+        timeoutMs: num('PI_TIMEOUT_MS', 180000),
+        thinking: env.PI_THINKING !== '0',
       },
     },
   };

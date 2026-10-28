@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 本机用：等喵团空闲（所有人都没有进行中、排队中的后台任务）再重启指定服务，避免打断正在跑的任务。线上用 systemctl restart。
-# 用法：scripts/restart.sh app|sandbox|all   [最长等待秒数，默认 600]
+# 用法：scripts/restart.sh app|sandbox|search|all   [最长等待秒数，默认 600]
 #   app 包括主 agent 和子 agent：重启时没跑完的任务会在重启后接着做
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -43,6 +43,11 @@ if [ "$WHAT" = sandbox ] || [ "$WHAT" = all ]; then
   pkill -f "node .*sandbox/server.mjs" || true; sleep 1
   launch "$ROOT/sandbox/server.out" "$ROOT/scripts/start-sandbox.sh"
   up 8660 && echo "sandbox 已重启"
+fi
+if [ "$WHAT" = search ] || [ "$WHAT" = all ]; then
+  pkill -f "$ROOT/search/.venv/bin/ddgs api" || true; sleep 1
+  launch "$ROOT/search/server.out" "$ROOT/scripts/start-search.sh"
+  up "${SEARCH_PORT:-4479}" && echo "search 已重启"
 fi
 if [ "$WHAT" = app ] || [ "$WHAT" = all ]; then
   pkill -f "node .*app/server.mjs" || true

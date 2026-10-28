@@ -14,7 +14,8 @@ export const clipLines = (s, n) => clip(String(s ?? '').replace(/\s*\n\s*/g, '\u
 export const hostOf = (url) => { try { return new URL(url).host.replace(/^www\./, ''); } catch { return clip(url, 40); } };
 
 export const hhmm = (iso) => new Date(iso).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false });
-export const nowText = () => new Date().toLocaleString('zh-CN', { hour12: false, weekday: 'short' });
+// 给模型看的「现在」：要带年月日，模型才知道自己的知识可能过时、算得出「明早」是哪天
+export const nowText = (d = new Date()) => d.toLocaleString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
 export function agoText(ms) {
   const m = Math.round(ms / 60_000);
   return m < 1 ? '刚刚' : m < 60 ? `${m} 分钟前` : m < 1440 ? `${Math.round(m / 60)} 小时前` : `${Math.round(m / 1440)} 天前`;

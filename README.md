@@ -4,7 +4,7 @@
 
 ```
 用户 ──► 主 agent（agent/main.mjs，每个聊天一个 Pi 会话 chat-<聊天 id>）
-          │  聊天口吻短回复；一两步能办完的自己办（搜索 / 读网页 / 搜图 / 看图 / 记忆 / 技能，不打电话）；
+          │  聊天口吻短回复；一两步能办完的自己办（搜索 / 搜图 / 看图 / 记忆 / 技能；不读网页、不打电话）；
           │  复杂的事（打电话、深度调研、要好几分钟的）用 subagent 工具派子 agent；改 / 停子 agent、出提问卡、建目标；连发的消息并进同一轮
           │
 目标调度器（每 30 秒看一次到期目标）──► 派「目标检查」子 agent ──► goal_update 报告结论，有新进展才由主 agent 在聊天里说
@@ -13,7 +13,8 @@
           │
           ▼
         子 agent（agent/worker.mjs，同一个 Pi runtime 的 worker profile）：派出时复制主 agent 的会话（task-<任务 id>），工具一样，外加打电话
-          │  deep_web_search / read_webpage ──► 沙箱浏览器（sandbox :8660，独立 profile 的无头 Chromium）
+          │  web_search ──► 搜索后端（默认本机 DDGS 服务 search :4479，不行再用沙箱浏览器搜必应）
+          │  web_fetch ──► 直接 HTTP 抓网页提取正文；read_webpage ──► 沙箱浏览器（sandbox :8660，独立 profile 的无头 Chromium）
           │  image_search ──► 必应图片搜索；phone_call ──► calls/（Mock 外呼平台）
           ▼
         结果（文字 + attachments：图、文档、通话组件）──► 送回主 agent 的会话，由它接着说
@@ -42,7 +43,8 @@ app/
     quota.mjs / live.mjs    每日额度 / 沙箱浏览器的实时画面和回放
     migrate.mjs             老数据转新格式（scripts/migrate.mjs 用）
   tools/                  业务工具（每个工具自带 label 和 describe：任务轨迹里那一步怎么写）
-    web.mjs                 网页搜索、读网页、读网址、搜图
+    web.mjs                 网页搜索（后端可换）、读网页、用浏览器读网页、搜图
+    extract.mjs             网页正文提取（Readability → Markdown）
     knowledge.mjs           记忆、技能、技能商店、翻聊天记录、看图
     business.mjs            打电话
     output.mjs              attach（附上图片 / 文档）
@@ -51,6 +53,7 @@ app/
   public/                 前端（原生 ES 模块，无构建）：app.js 入口，ui/ 下按块分（chat、tasks、goals、cards 附件……）
   data/users/<id>/        每个人的聊天、任务、目标、上传的图、回放、通话记录与 agent-home/
 sandbox/        沙箱浏览器：网页搜索和读网页（只读）；profile 在 sandbox/profile/
+search/         搜索服务 DDGS（Python）：requirements.txt 钉死版本，装在 search/.venv/
 deploy/         部署：setup.sh 一键安装 / 更新（systemd、Caddy、每日备份），见 deploy/README.md
 agent-home/     agent 的模板目录（每个账号的主目录从这里同步）；管理员也可沿用此处的本地数据
   SOUL.md                 人设和做事原则（主 agent、子 agent 共用）
@@ -58,18 +61,19 @@ agent-home/     agent 的模板目录（每个账号的主目录从这里同步�
   config.yaml             工具、技能和记忆的开关
   skills/cattuan/         项目自带技能（深度搜索、打电话、本地生活）
   memories/ pi/sessions/  长期记忆、Pi 会话（运行时数据）
-scripts/        start.sh 一键启动；restart.sh 等没有进行中的任务再重启；migrate.mjs 老数据迁移
+scripts/        start.sh 一键启动；restart.sh 等没有进行中的任务再重启；migrate.mjs 老数据迁移；start-search.sh 起搜索服务
   user.mjs                账号管理：add 建号 / passwd 改密码 / list / disable / enable / adopt（从单用户版升级）
 ```
 
 ## 启动
 
-第一次（需要 Node 22.19+、Chrome 或 Playwright 的 Chromium）：
+第一次（需要 Node 22.19+、Chrome 或 Playwright 的 Chromium、Python 3.10+ 和 venv）：
 
 ```bash
 git clone <仓库地址> CatTuan && cd CatTuan
 npm ci --omit=dev --prefix app                                    # 安装 Pi SDK（锁定 @earendil-works/pi-coding-agent 1.3.0）
 npm ci --omit=dev --prefix sandbox                                # 装 playwright-core（复用本机 Playwright 缓存的 Chromium）
+python3 -m venv search/.venv && search/.venv/bin/pip install -r search/requirements.txt   # 搜索服务 DDGS
 cp agent-home/.env.example agent-home/.env                        # 填上自己的 LONGCAT_API_KEY
 node scripts/user.mjs add <你的名字> --admin                         # 建管理员账号，按提示设密码
 ```
@@ -77,16 +81,16 @@ node scripts/user.mjs add <你的名字> --admin                         # 建�
 以后每次：
 
 ```bash
-scripts/start.sh                     # sandbox :8660 + app http://localhost:3210
+scripts/start.sh                     # sandbox :8660 + search :4479 + app http://localhost:3210
 ```
 
 从老版本升级：先停掉 App（和老版本的 agent 守护进程），再跑一次 `node scripts/migrate.mjs`（`--dry-run` 先看要改什么）。它会先在 `app/data/backups/` 打一个备份包，再把老格式的消息、任务、目标、聊天会话和工具开关转成现在的格式；可以重复跑。从单用户版升级的先跑 `node scripts/user.mjs adopt <你的名字>`。
 
 - `LONGCAT_API_KEY`：读取 `agent-home/.env`，所有账号共用。
-- 子 agent 的模型可用 `PI_MODEL`、`PI_API_URL`、`PI_API_KEY` 覆盖，`PI_MAX_TOKENS` 默认 8192，`PI_CONTEXT_WINDOW` 默认 128000，`PI_MAX_TURNS` 默认 90；主 agent 用 `DISPATCH_MODEL`（要能看图）、`DISPATCH_API_URL`、`DISPATCH_MAX_TURNS`（默认 10）、`DISPATCH_MAX_TOKENS`（默认 1024）。达到限制会明确标记失败。
-- `config.yaml` 管工具开关（`toolsets`：images 搜图、vision 看图、memory 记忆、session_search 翻聊天记录、skills 技能、web 网页、phone 打电话；`disabled_tools` 单独关）、技能和记忆开关。
+- 子 agent 的模型可用 `PI_MODEL`、`PI_API_URL`、`PI_API_KEY` 覆盖，`PI_MAX_TOKENS` 默认 16384，`PI_CONTEXT_WINDOW` 默认 128000，`PI_MAX_TURNS` 默认 90；主 agent 用 `DISPATCH_MODEL`（要能看图）、`DISPATCH_API_URL`、`DISPATCH_MAX_TURNS`（默认 10）、`DISPATCH_MAX_TOKENS`（默认 8192）。达到限制会明确标记失败。两边默认都开思考，思考也算输出 token（`PI_THINKING=0`、`DISPATCH_THINKING=0` 分别关掉）。模型请求多久没开始回就算超时并重试一次：主 agent `DISPATCH_TIMEOUT_MS` 默认 60000，子 agent `PI_TIMEOUT_MS` 默认 180000（只管到开始回为止，长回答不受影响）；主 agent 这一轮失败时会告诉用户一声。
+- `config.yaml` 管工具开关（`toolsets`：images 搜图、vision 看图、memory 记忆、session_search 翻聊天记录、skills 技能、web 网页、phone 打电话；`disabled_tools` 单独关）、技能和记忆开关，以及搜索和读网页的后端（`web.search_backend` 默认 `[ddgs, browser]`：先用 DDGS，出错或没结果再用沙箱浏览器；`web.fetch_backend` 默认 `http`）。要接别的搜索服务（Brave、Tavily、SearXNG……）就在 `app/tools/web.mjs` 的后端表里加一个函数。
 - 仓库里只有代码和配置。运行时数据都在本机、不进仓库（见 `.gitignore`）：账号库和每个人的数据 `app/data/`（聊天记录、Pi 会话、记忆、自动装的技能），以及沙箱浏览器的 profile `sandbox/profile/`。
-- 沙箱浏览器使用 `agent-home/.env` 里的 `HTTP(S)_PROXY` 访问国外网站（也可以单独设 `SANDBOX_PROXY`），国内站点始终直连。
+- 沙箱浏览器使用 `agent-home/.env` 里的 `HTTP(S)_PROXY` 访问国外网站（也可以单独设 `SANDBOX_PROXY`），国内站点始终直连。搜索服务同样沿用 `HTTPS_PROXY`（或单独设 `SEARCH_PROXY`）；不在本机时用 `DDGS_URL` 指过去。
 
 ## 测试
 
@@ -108,9 +112,9 @@ scripts/start.sh                     # sandbox :8660 + app http://localhost:3210
 - **聊天**：主 agent 在想、在搜、在转述时，顶栏标题下面的状态实时显示它正在做的那一步（每一步的说法由工具自己写），同时几件事会带件数；没事时显示后台任务数或「在线」。喵团在想上一条时也能接着发：新消息并进正在想的那一轮（Pi 插话），几条合起来回、只办一次事。派了后台任务时，聊天页右下角的小电视直播它在干什么；任务完成后，结果作为新消息发回，并标注「来自后台任务」。
 - **附件**：消息下面挂的东西都在 `attachments` 里，按类型画——图墙（agent 用 `attach` 挑的图）、文档卡片（调研报告、长清单，点开是阅读页，[n] 引用可点）、提问卡（`ask_user`）、通话组件（`phone_call` 打完自带）。
 - **输入区**（仿微信）：输入框右边是「+」，有内容时变成「发送」。点「+」弹出工具面板：相册、拍摄。
-- **技能**（用户不用设置）：agent 需要什么技能就自己装。遇到现有工具和技能做不好的事，它会用 `skill_store` 在本地技能和在线技能库（skills.sh 等）里找，然后安装。在线技能安装前会校验来源、路径和内容，拒绝可执行载荷与危险指令；装的原因记在 `agent-home/skills/.cattuan_installs.json`。很多技能要读网页，所以 agent 有只读的 `fetch_url`（只能 GET 公开网址，内网和本机地址会被拦截，限大小）。
+- **技能**（用户不用设置）：agent 需要什么技能就自己装。遇到现有工具和技能做不好的事，它会用 `skill_store` 在本地技能和在线技能库（skills.sh 等）里找，然后安装。在线技能安装前会校验来源、路径和内容，拒绝可执行载荷与危险指令；装的原因记在 `agent-home/skills/.cattuan_installs.json`。很多技能要读网页，所以 agent 有只读的 `web_fetch`（只能 GET 公开网址，内网和本机地址会被拦截，限大小）。
 - **目标**：持续目标，定时派子 agent 检查（每 N 分钟、每天几点，或到点办一次）。检查那一轮多一个 `goal_update` 工具报告结论：有新进展（notify）才交给主 agent 在建目标的那个聊天里说，标「🎯 来自目标」；已推过的图不会重复推；事情彻底办完（done）自动完成。可以在目标页用一句话添加，也可以在聊天里说「以后每天早上 8 点告诉我天气」「机票降到 800 以下提醒我」「半小时后再打一次」。支持立即检查、暂停、删除、完成。点卡片展开详情：目标说明、动态时间线和下次检查时间。
-- **深度搜索**：遇到要全面查清楚、调研、对比、找途径的问题，主 agent 派子 agent 并让它先加载 `deep-research` 技能：用 `deep_web_search` 换角度搜几轮（在沙箱真实浏览器里搜必应），用 `read_webpage` 读原文，再交叉核对，最后用 `attach` 附上一份带 [n] 引用的报告。读网页只读：不下载文件、不访问内网，国内站点直连。
+- **深度搜索**：遇到要全面查清楚、调研、对比、找途径的问题，主 agent 派子 agent 并让它先加载 `deep-research` 技能：用 `web_search` 换角度搜几轮，用 `web_fetch` 读原文（读不到的用 `read_webpage` 在沙箱浏览器里打开），再交叉核对，最后用 `attach` 附上一份带 [n] 引用的报告。读网页只读：不下载文件、不访问内网，国内站点直连。
 - **打电话**：子 agent 用 `phone_call` 打（主 agent 不能打：打一通要几分钟）。什么时候该打、要约要带齐哪些信息、没接通怎么跟进、结果怎么说，都在 `phone-call` 技能里；代码里只有平台规则（要有号码、每个号码每天最多 2 次）和 Mock 外呼平台。通话中任务轨迹里实时显示排队 → 拨号 → 通话，打完挂通话组件、记进「喵团档案 → 电话」。
 - **浏览器实时画面**（仿 Claude Cowork）：子 agent 用沙箱浏览器搜网页、读网页时，任务卡片里那一步下面会出现一个小浏览器窗口，有地址栏、实时画面（每秒最多 4 帧）和当前在做的一步。做完后保留最多 16 张关键帧做「回放」。只有 App 开着时才推连续画面；没人看时只记步骤和关键帧。
 - **任务**：看所有后台任务（对话任务和目标检查）的状态、每一步、用时、任务说明、结果和附件。进行中、排队中的任务卡片上有「停止」按钮。
@@ -121,5 +125,6 @@ scripts/start.sh                     # sandbox :8660 + app http://localhost:3210
 
 - 主 agent 的会话 Pi 会自动压缩；删聊天时一起删。派子 agent 时复制聊天会话（`SessionManager.forkFrom`），子 agent 接着这段对话做事，task 里不用复述聊天。目标检查不复制会话，只凭目标说明做。
 - 必应搜图的补充结果质量一般，靠屏蔽站点名单加 agent 挑图来过滤。
-- 多人时沙箱浏览器是串行的（深度搜索也走它），人多会排队。
+- 多人时沙箱浏览器是串行的，人多会排队；搜索默认走 DDGS、读网页默认直接抓，只有回退和 `read_webpage` 才用它。
+- DDGS 是免费的元搜索，抓的是公开搜索引擎的页面：偶尔会搜不到或被限流（这时自动改用沙箱浏览器搜），对稳定性要求高就接一个付费搜索 API。
 - 改了 `agent-home/config.yaml` 以后，新账号自动用新的，已有账号的 config.yaml 要手动同步（技能商店会改各人那份）。提示词文件（SOUL / MAIN / WORKER）是链接，改模板全员生效。

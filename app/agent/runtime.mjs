@@ -87,7 +87,7 @@ function display(tool, args, out) {
 }
 
 /**
- * profiles：{ 名字: { model: { id, url, key, maxTokens, contextWindow, maxTurns }, tools(ctx) → { tools, systemPrompt, close }, instructions(bridge) → string } }
+ * profiles：{ 名字: { model: { id, url, key, maxTokens, contextWindow, maxTurns, timeoutMs?, thinking? }, tools(ctx) → { tools, systemPrompt, close }, instructions(bridge) → string } }
  * 同一个 profile 的模型按 url + key 注册成一个 provider；modelRuntime 只给测试替换。
  */
 export async function createRuntime({ home, agentDir, profiles, modelRuntime: suppliedModels, createSession = createAgentSession, now = Date.now }) {
@@ -109,9 +109,10 @@ export async function createRuntime({ home, agentDir, profiles, modelRuntime: su
       models.registerProvider(name, {
         baseUrl: m.url, api: 'openai-completions', apiKey: m.key, authHeader: true,
         models: [{
-          id: m.id, name: m.id, reasoning: false, input: ['text', 'image'], contextWindow: m.contextWindow, maxTokens: m.maxTokens,
+          id: m.id, name: m.id, reasoning: !!m.thinking, input: ['text', 'image'], contextWindow: m.contextWindow, maxTokens: m.maxTokens,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          samplingParams: { thinking: { type: 'disabled' } },
+          // LongCat 的思考开关；思考内容从 reasoning_content 回来，Pi 存成思考块，不进交回的文字
+          samplingParams: { thinking: { type: m.thinking ? 'enabled' : 'disabled' } },
           compat: { supportsStore: false, supportsDeveloperRole: false, supportsReasoningEffort: false, maxTokensField: 'max_tokens' },
         }],
       });
@@ -133,6 +134,7 @@ export async function createRuntime({ home, agentDir, profiles, modelRuntime: su
   async function execute(run) {
     const profile = profiles[run.profile];
     const { maxTurns, maxTokens } = profile.model;
+    const thinkingLevel = profile.model.thinking ? 'medium' : 'off';
     let session, bridge, unsubscribe, terminal, prompt;
     try {
       const model = models.getModel(run.profile, profile.model.id);
@@ -145,11 +147,12 @@ export async function createRuntime({ home, agentDir, profiles, modelRuntime: su
       await writeFile(path.join(dir, 'task.json'), JSON.stringify({ task_session_id: run.sessionId }) + '\n', { mode: 0o600 });
       const settingsManager = SettingsManager.inMemory({
         cacheWarming: 'off', enableAnalytics: false, enableInstallTelemetry: false,
-        retry: { enabled: false, provider: { maxRetries: 0 } },
-        defaultProvider: run.profile, defaultModel: profile.model.id, defaultThinkingLevel: 'off',
+        // 模型请求迟迟不开始回（LongCat 偶尔一挂就是 5 分钟）：按 profile 的 timeoutMs 超时，再重试一次。不做整轮重跑
+        retry: { enabled: false, provider: { maxRetries: 1, ...(profile.model.timeoutMs && { timeoutMs: profile.model.timeoutMs }) } },
+        defaultProvider: run.profile, defaultModel: profile.model.id, defaultThinkingLevel: thinkingLevel,
       });
       ({ session } = await createSession({
-        cwd: home, agentDir, modelRuntime: models, model, thinkingLevel: 'off',
+        cwd: home, agentDir, modelRuntime: models, model, thinkingLevel,
         // An explicit allowlist keeps every built-in filesystem/shell tool off,
         // even if a Pi version changes its default tool selection.
         noTools: 'builtin', tools: bridge.tools.map((tool) => tool.name), customTools: bridge.tools,

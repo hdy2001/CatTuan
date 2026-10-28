@@ -166,7 +166,8 @@ export function createMain({ agents, actions, context, post, activity, delivered
       turn.deliveries = turn.deliveries.filter((d) => !missed.includes(d));
       carry = [{ kind: 'raw', body: late, deliveries: missed }];
     }
-    if (end.event === 'run.failed' && !turn.posted && turn.users) turn.buffer.push(FALLBACK); // 停掉的（删聊天、App 关了）不道歉
+    // 失败了说一声（哪怕已经说过「我查查」）；停掉的（删聊天、App 关了）不道歉
+    if (end.event === 'run.failed' && turn.users) turn.buffer.push(FALLBACK);
     flush(u, chatId, turn, true);
     await chatOf(u, chatId).chain;
     await turn.chain;

@@ -72,7 +72,7 @@ test('native Pi SDK runs a native business tool and restores the task conversati
     assert.match(requests[0].messages[0].content, /你是喵团/, 'the worker reads SOUL.md from its home');
     const toolNames = requests[0].tools.map((tool) => tool.function.name);
     assert.ok(toolNames.includes('memory') && toolNames.includes('attach'));
-    assert.ok(!toolNames.some((name) => ['bash', 'read', 'write', 'edit', 'terminal', 'phone_call', 'deep_web_search'].includes(name)), toolNames.join());
+    assert.ok(!toolNames.some((name) => ['bash', 'read', 'write', 'edit', 'terminal', 'phone_call', 'web_search'].includes(name)), toolNames.join());
 
     await agents.close();
     agents = createAgents({ config });
