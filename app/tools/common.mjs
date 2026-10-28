@@ -84,7 +84,7 @@ export async function withFileLock(file, fn, signal) {
 }
 
 // label：给人看的工具名；describe(args) → { act, detail, done(out) }：这一步在做什么、做完怎么写（任务轨迹和顶栏状态用）
-// usesBrowser：会用沙箱浏览器（任务轨迹里这一步挂浏览器画面和回放）
-export function tool(name, toolset, { label, description, parameters, describe, usesBrowser }, execute) {
-  return { name, toolset, label, description, parameters, describe, usesBrowser, execute };
+// usesBrowser：会用沙箱浏览器（任务轨迹里这一步挂浏览器画面和回放）；timeoutMs：这个工具一次最多跑多久（不写用统一的）
+export function tool(name, toolset, { label, description, parameters, describe, usesBrowser, timeoutMs }, execute) {
+  return { name, toolset, label, description, parameters, describe, usesBrowser, timeoutMs, execute };
 }

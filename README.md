@@ -14,7 +14,7 @@
           ▼
         子 agent（agent/worker.mjs，同一个 Pi runtime 的 worker profile）：派出时复制主 agent 的会话（task-<任务 id>），工具一样，外加打电话
           │  deep_web_search / read_webpage ──► 沙箱浏览器（sandbox :8660，独立 profile 的无头 Chromium）
-          │  image_search ──► 必应图片搜索；phone_call ──► calls/（Mock 外呼平台）
+          │  image_search ──► 必应图片搜索；phone_call ──► calls/（木星外呼平台 mt-jupiter-cli call aicall）
           ▼
         结果（文字 + attachments：图、文档、通话组件）──► 送回主 agent 的会话，由它接着说
 ```
@@ -46,7 +46,7 @@ app/
     knowledge.mjs           记忆、技能、技能商店、翻聊天记录、看图
     business.mjs            打电话
     output.mjs              attach（附上图片 / 文档）
-  calls/                  打电话：calls.mjs 通话记录和平台规则，mock-provider.mjs Mock 外呼平台（换真平台只换它）
+  calls/                  打电话：calls.mjs 通话记录，jupiter-provider.mjs 木星外呼（aicall 拨号、查话单），cli-auth.mjs 鉴权
   http/                   登录（auth）、接口路由（routes）、上传和图片代理（media）
   public/                 前端（原生 ES 模块，无构建）：app.js 入口，ui/ 下按块分（chat、tasks、goals、cards 附件……）
   data/users/<id>/        每个人的聊天、任务、目标、上传的图、回放、通话记录与 agent-home/
@@ -87,10 +87,11 @@ scripts/start.sh                     # sandbox :8660 + app http://localhost:3210
 - `config.yaml` 管工具开关（`toolsets`：images 搜图、vision 看图、memory 记忆、session_search 翻聊天记录、skills 技能、web 网页、phone 打电话；`disabled_tools` 单独关）、技能和记忆开关。
 - 仓库里只有代码和配置。运行时数据都在本机、不进仓库（见 `.gitignore`）：账号库和每个人的数据 `app/data/`（聊天记录、Pi 会话、记忆、自动装的技能），以及沙箱浏览器的 profile `sandbox/profile/`。
 - 沙箱浏览器使用 `agent-home/.env` 里的 `HTTP(S)_PROXY` 访问国外网站（也可以单独设 `SANDBOX_PROXY`），国内站点始终直连。
+- 打电话走木星外呼平台的 CLI（`mt-jupiter-cli`），要配 `JUPITER_TENANT_ID`、`JUPITER_ROUTE_POINT` 等（见 `agent-home/.env.example`「打电话」一段）；没配时 `phone_call` 直接返回「外呼平台没配置」。可以全站配一份，也可以写进某个账号自己的 `<home>/.env` 覆盖。鉴权用 `JUPITER_AUTH` 选：`moa`（默认，CLI 用本机登录的 MOA 自己换票）、`token`（直接给 SSO token）、`command`（每次外呼前跑一条命令取 token）；加别的取票方式在 `app/calls/cli-auth.mjs` 的 `SOURCES` 里加一个函数。
 
 ## 测试
 
-`npm test --prefix app`。只使用临时数据和本地模拟服务（模拟模型、模拟沙箱、Mock 外呼）；不会拨打真实电话或改动用户数据。`app/e2e.test.mjs` 在临时目录里起整套 App，经 HTTP 接口走完聊天、派子 agent、附件、插话、停止、打电话、目标、App 重启续跑和账号隔离。
+`npm test --prefix app`。只使用临时数据和本地模拟服务（模拟模型、模拟沙箱、假的外呼 CLI `app/calls/fake-cli.mjs`）；不会拨打真实电话或改动用户数据。`app/e2e.test.mjs` 在临时目录里起整套 App，经 HTTP 接口走完聊天、派子 agent、附件、插话、停止、打电话、目标、App 重启续跑和账号隔离。
 
 ## 多人使用（账号）
 
@@ -111,7 +112,7 @@ scripts/start.sh                     # sandbox :8660 + app http://localhost:3210
 - **技能**（用户不用设置）：agent 需要什么技能就自己装。遇到现有工具和技能做不好的事，它会用 `skill_store` 在本地技能和在线技能库（skills.sh 等）里找，然后安装。在线技能安装前会校验来源、路径和内容，拒绝可执行载荷与危险指令；装的原因记在 `agent-home/skills/.cattuan_installs.json`。很多技能要读网页，所以 agent 有只读的 `fetch_url`（只能 GET 公开网址，内网和本机地址会被拦截，限大小）。
 - **目标**：持续目标，定时派子 agent 检查（每 N 分钟、每天几点，或到点办一次）。检查那一轮多一个 `goal_update` 工具报告结论：有新进展（notify）才交给主 agent 在建目标的那个聊天里说，标「🎯 来自目标」；已推过的图不会重复推；事情彻底办完（done）自动完成。可以在目标页用一句话添加，也可以在聊天里说「以后每天早上 8 点告诉我天气」「机票降到 800 以下提醒我」「半小时后再打一次」。支持立即检查、暂停、删除、完成。点卡片展开详情：目标说明、动态时间线和下次检查时间。
 - **深度搜索**：遇到要全面查清楚、调研、对比、找途径的问题，主 agent 派子 agent 并让它先加载 `deep-research` 技能：用 `deep_web_search` 换角度搜几轮（在沙箱真实浏览器里搜必应），用 `read_webpage` 读原文，再交叉核对，最后用 `attach` 附上一份带 [n] 引用的报告。读网页只读：不下载文件、不访问内网，国内站点直连。
-- **打电话**：子 agent 用 `phone_call` 打（主 agent 不能打：打一通要几分钟）。什么时候该打、要约要带齐哪些信息、没接通怎么跟进、结果怎么说，都在 `phone-call` 技能里；代码里只有平台规则（要有号码、每个号码每天最多 2 次）和 Mock 外呼平台。通话中任务轨迹里实时显示排队 → 拨号 → 通话，打完挂通话组件、记进「喵团档案 → 电话」。
+- **打电话**：子 agent 用 `phone_call` 打（主 agent 不能打：打一通要几分钟）。什么时候该打、要约要带齐哪些信息、没接通怎么跟进、结果怎么说，都在 `phone-call` 技能里。电话由木星外呼平台的 AI 外呼 Agent 打：这通电话的要求按它写死的格式（电话号码、merchantName、purpose、category、mode、customerNeed、rejectedTerms、allowedInfo、toConfirm、pauseCases，全是字符串）放进 `--media-txt`，缺必填项就不拨；拨出去后隔一会儿查一次话单，挂断后整理成结果。平台接了这通就马上记进通话记录，打完补上结果；App 重启或任务停了又接着做时，同一个任务半小时内再打同一个号码，会接着等上一通的结果，不会给商家再打一次。等到上限（`JUPITER_RESULT_MINUTES`）还没结果的，如实告诉用户「打出去了、结果不知道」，不自动重拨。任务轨迹里实时显示排队 → 拨号 → 结果，打完挂通话组件、记进「喵团档案 → 电话」。
 - **浏览器实时画面**（仿 Claude Cowork）：子 agent 用沙箱浏览器搜网页、读网页时，任务卡片里那一步下面会出现一个小浏览器窗口，有地址栏、实时画面（每秒最多 4 帧）和当前在做的一步。做完后保留最多 16 张关键帧做「回放」。只有 App 开着时才推连续画面；没人看时只记步骤和关键帧。
 - **任务**：看所有后台任务（对话任务和目标检查）的状态、每一步、用时、任务说明、结果和附件。进行中、排队中的任务卡片上有「停止」按钮。
 - **改任务 / 停止**：对一个排队中、进行中或刚做完的任务说「不要…」「换成…」「再加上…」，主 agent 会调 `steer_task` 改那个任务，不另开新任务；说「别弄了」就调 `stop_task`。排队中 → 并进任务说明；进行中 → 插话进这一轮，agent 在下一步之前看到新要求；插话没赶上这一轮 → 在同一个会话里接着改一轮；已完成 / 失败 / 已停止 → 在同一个 Pi 会话（`task-<任务 id>`）里接着跑「第 N 轮修改」，结果更新在原任务上。
@@ -122,4 +123,5 @@ scripts/start.sh                     # sandbox :8660 + app http://localhost:3210
 - 主 agent 的会话 Pi 会自动压缩；删聊天时一起删。派子 agent 时复制聊天会话（`SessionManager.forkFrom`），子 agent 接着这段对话做事，task 里不用复述聊天。目标检查不复制会话，只凭目标说明做。
 - 必应搜图的补充结果质量一般，靠屏蔽站点名单加 agent 挑图来过滤。
 - 多人时沙箱浏览器是串行的（深度搜索也走它），人多会排队。
+- 外呼 CLI 没有挂断命令：任务停了只是不再等结果，已经接通的电话挂不断。话单里通话文字（`recordText`）的格式还没对过真数据，现在按常见写法宽松解析。
 - 改了 `agent-home/config.yaml` 以后，新账号自动用新的，已有账号的 config.yaml 要手动同步（技能商店会改各人那份）。提示词文件（SOUL / MAIN / WORKER）是链接，改模板全员生效。

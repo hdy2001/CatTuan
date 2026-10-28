@@ -43,7 +43,7 @@ export async function createTools(options = {}, { exclude = [], timeoutMs = 3300
       name: spec.name, label: spec.label || spec.name, description: spec.description, parameters: spec.parameters,
       describe: spec.describe, usesBrowser: spec.usesBrowser,
       async execute(_id, args, callSignal, onUpdate) {
-        const active = AbortSignal.any([lifetime.signal, signal, callSignal, AbortSignal.timeout(timeoutMs)].filter(Boolean));
+        const active = AbortSignal.any([lifetime.signal, signal, callSignal, AbortSignal.timeout(spec.timeoutMs || timeoutMs)].filter(Boolean));
         active.throwIfAborted();
         if (!allowed(spec)) throw new Error(`Tool is unavailable or disabled: ${spec.name}`);
         const progress = onUpdate ? (details) => onUpdate({ content: [], details }) : () => {};

@@ -1,0 +1,8 @@
+#!/bin/sh
+# 替身：木星 CLI 换 SSO token 时会调 mtsso-moa-local-exchange，这里直接吐出 App 给的 token（见 ../cli-auth.mjs）。
+# 只在 JUPITER_AUTH=token / command 时放进 CLI 的 PATH；moa 方式用本机真的换票工具。
+if [ -z "$CATTUAN_SSO_TOKEN" ]; then
+  echo "CATTUAN_SSO_TOKEN 没设置" >&2
+  exit 1
+fi
+printf '%s\n' "$CATTUAN_SSO_TOKEN"

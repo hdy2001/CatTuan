@@ -9,6 +9,7 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import test from 'node:test';
+import { writeFakeCli, record } from './calls/fake-cli.mjs';
 
 const APP = path.dirname(fileURLToPath(import.meta.url));
 
@@ -77,7 +78,7 @@ async function stack(script, env = {}) {
   const appUrl = `http://127.0.0.1:${appPort}`;
   const log = [];
   const appEnv = { PATH: process.env.PATH, HOME: process.env.HOME, TZ: process.env.TZ || 'Asia/Shanghai',
-    CATTUAN_DATA_DIR: dir, CATTUAN_SANDBOX_URL: sandboxUrl, LONGCAT_API_KEY: 'fake-e2e-key', CALL_SPEED: '0',
+    CATTUAN_DATA_DIR: dir, CATTUAN_SANDBOX_URL: sandboxUrl, LONGCAT_API_KEY: 'fake-e2e-key',
     PORT: String(appPort), DISPATCH_API_URL: modelUrl, PI_API_URL: modelUrl, PI_MAX_TURNS: '8', ...env };
 
   // 账号：直接写库，建好主目录（和 scripts/user.mjs add 一样）
@@ -228,17 +229,22 @@ test('e2e: chat, subagent with a document, steering, stop and account isolation'
 });
 
 test('e2e: a phone call reports progress and comes back with its call card', { timeout: 120000 }, async (t) => {
+  // 假的木星 CLI：拨出去拿到 C-e2e，第一次查话单就有结果（不会真的打电话）
+  const fake = await mkdtemp(path.join(os.tmpdir(), 'cattuan-e2e-cli-'));
+  t.after(() => rm(fake, { recursive: true, force: true }));
+  const cli = writeFakeCli(fake, { aicall: { out: { contactId: 'C-e2e' } },
+    query: [{ out: [record('C-e2e', { lines: [{ role: 'robot', text: '您好，我是喵团' }, { role: 'customer', text: '下午三点有位' }] })] }] });
   const s = await stack(async (role, body) => {
-    if (role === 'llm') return { json: { lines: [{ who: 'ai', text: '您好，我是喵团' }, { who: 'shop', text: '下午三点有位' }], answers: {}, summary: '下午三点有位' } };
+    if (role === 'llm') return { json: { outcome: 'answered', answers: {}, summary: '下午三点有位' } };
     const last = lastText(body);
     if (role === 'main') {
       if (afterTool(body)) return { text: '' };
       if (last.includes('【后台任务结果】')) return { text: '✅ 下午三点有位～' };
       return { text: '📞 好，我打过去问问', tools: [['subagent', { title: '问美甲', task: '打给栗子美甲问下午三点有没有位', skills: ['phone-call'] }]] };
     }
-    if (!afterTool(body)) return { tools: [['phone_call', { to: '010-12345678', name: '栗子美甲（和平里店）', goal: '问下午三点有没有位', mode: 'ask' }]] };
+    if (!afterTool(body)) return { tools: [['phone_call', { to: '010-12345678', name: '栗子美甲（和平里店）', goal: '问下午三点有没有位', mode: 'ask', category: '美甲' }]] };
     return { text: '栗子美甲：下午三点有位。' };
-  }, { CALL_MOCK_OUTCOME: 'answered' });
+  }, { JUPITER_CLI: cli.bin, JUPITER_TENANT_ID: 'tenant-e2e', JUPITER_ROUTE_POINT: '1', JUPITER_POLL_SECONDS: '0' });
   await run(t, s, async () => {
     const alice = await s.login('alice');
     await alice.send('帮我问问栗子美甲下午三点有没有位');
@@ -254,6 +260,10 @@ test('e2e: a phone call reports progress and comes back with its call card', { t
     assert.equal(log.line, '美团专线');
     assert.equal(log.calls[0].summary, '下午三点有位');
     assert.equal(log.calls[0].taskId, task.id);
+    assert.equal(log.calls[0].ref, 'C-e2e');
+    assert.equal(log.calls[0].lines.length, 2);
+    const media = JSON.parse(cli.calls()[0].argv.at(-1));
+    assert.deepEqual([media.电话号码, media.merchantName, media.category, media.mode, media.allowedInfo], ['01012345678', '栗子美甲（和平里店）', '美甲', 'ask', '不提供任何顾客信息']);
   });
 });
 

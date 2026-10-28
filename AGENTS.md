@@ -10,7 +10,7 @@
 - 运行时：`app/agent/runtime.mjs` 用 Pi SDK 管理模型循环与持久化会话，一个账号一个 runtime（`app/agent/agents.mjs`），按 profile 区分主 agent（`main`）和子 agent（`worker`）；都在 App 进程里跑。
 - 主 agent：`app/agent/main.mjs` 每个聊天一个会话 `chat-<聊天 id>`，自己干活（和子 agent 同一套业务工具，不含打电话），复杂的事用 `subagent` 工具派子 agent；聊天专用工具在 `app/agent/main-tools.mjs`，每轮读到的状态块在 `app/agent/context.mjs`。
 - 子 agent：派出时把主 agent 会话复制成 `task-<任务 id>`，由 `app/agent/worker.mjs` 跑，工具和主 agent 一样，外加打电话。任务的排队、轮次、插话、停止、重启续跑在 `app/core/tasks.mjs`；目标在 `app/core/goals.mjs`。
-- 工具层：`app/agent/tools.mjs` 注册工具、应用 `config.yaml` 开关并传递取消信号和进度回调；`app/tools/` 下实现业务能力（`web`、`knowledge`、`business`、`output`），`common.mjs` 提供文件锁、原子写入和配置读写。打电话的平台规则和 Mock 外呼在 `app/calls/`。
+- 工具层：`app/agent/tools.mjs` 注册工具、应用 `config.yaml` 开关并传递取消信号和进度回调；`app/tools/` 下实现业务能力（`web`、`knowledge`、`business`、`output`），`common.mjs` 提供文件锁、原子写入和配置读写。打电话在 `app/calls/`：通话记录（`calls.mjs`）、木星外呼 CLI（`jupiter-provider.mjs`，拨号用 `call aicall`、结果查话单）和它的鉴权（`cli-auth.mjs`）。
 - App 层：`app/server.mjs` 只组装模块；`app/http/` 是登录、接口路由、上传和图片代理；`app/core/` 是每个人的状态、聊天、额度、浏览器实时画面。
 - 账号层：`app/accounts.mjs` 管理账号和登录；`app/homes.mjs` 解析每个用户的数据目录和 agent 主目录。
 - 前端：`app/public/` 直接提供静态资源（原生 ES 模块，入口 `app.js`，界面各块在 `ui/`），无前端构建步骤。沿用现有交互、移动端适配与视觉样式。
@@ -38,7 +38,7 @@
 - 迁移前确认任务空闲并停止写入数据的服务，保留可恢复备份；迁移应可重复执行，不覆盖已有目标目录、不丢失用户资料。
 - 保持每个账号的 API 鉴权、数据访问、任务事件与回放隔离。工具只拿当前用户的 home、上传目录和任务编号；不要广播 SSE，也不要信任客户端提供的用户 id。
 - 保持 App 写接口的来源校验。公开 URL 抓取须校验重定向和解析地址，禁止访问内网。
-- 测试使用临时目录和模拟服务；普通验证不要拨打真实电话、创建真实预约或修改真实用户数据。
+- 测试使用临时目录和模拟服务（外呼用 `app/calls/fake-cli.mjs` 的假 CLI）；普通验证不要拨打真实电话、创建真实预约或修改真实用户数据。
 
 ## 常用命令
 
