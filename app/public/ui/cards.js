@@ -80,7 +80,7 @@ function askHtml(b) {
 }
 
 // ---------- 通话组件（仿 Cue：喵团有自己的电话，每通电话一条记录） ----------
-// 记录：{ id, who, short, phone, agent, at, seconds, status, summary, lines }。status：done 接通了 / missed 打出去没接通 / blocked 平台拦下没打出去
+// 记录：{ id, who, short, phone, agent, at, seconds, status, summary, lines }。status：done 接通了 / missed 打出去没接通 / blocked 平台拦下没打出去 / dialing、pending 打出去了还没等到结果
 const CALL_LINE = '美团专线'; // 拨出线路：外显号码不固定，界面上不显示号码
 const PHONE_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 3.5h2.6l1.4 4.1-1.9 1.3a11.5 11.5 0 0 0 6.4 6.4l1.3-1.9 4.1 1.4v2.6a2 2 0 0 1-2.2 2A16.5 16.5 0 0 1 4.6 5.7a2 2 0 0 1 2-2.2z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></svg>';
 const CALL_CHEVRON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>';
@@ -139,16 +139,17 @@ export function closeCallSheet() { const el = document.getElementById('callsShee
 // ---------- 任务轨迹里的通话：排队 → 拨号 → 通话 → 核对。外呼平台挂断后才给转写，通话中只显示阶段和计时 ----------
 // call：{ shop, phone, agent, stage, lines }；演示脚本还会给 attempt（第几次拨）、retryIn / retryAt（多久后重拨）、eta
 const STAGES = [['queued', '排队'], ['dialing', '拨号'], ['talking', '通话'], ['verifying', '核对']];
-const STAGE_TEXT = { queued: '排队中', dialing: '正在拨号…', talking: '通话中', verifying: '核对结果…', retry: '等待重拨', missed: '没打通', blocked: '没打出去', waiting: '等你决定', done: '通话结束' };
+const STAGE_TEXT = { queued: '排队中', dialing: '正在拨号…', talking: '通话中', verifying: '核对结果…', retry: '等待重拨', missed: '没打通', blocked: '没打出去', pending: '等结果', waiting: '等你决定', done: '通话结束' };
 
 export function callLiveHtml(c, t) {
   if (!c) return '';
   const order = STAGES.map(([k]) => k);
   const miss = ['retry', 'missed', 'blocked'].includes(c.stage);
-  const at = miss ? 1 : order.includes(c.stage) ? order.indexOf(c.stage) : order.length;
+  const pending = c.stage === 'pending'; // 打出去了，没等到平台的结果：不知道接没接通
+  const at = miss ? 1 : pending ? 2 : order.includes(c.stage) ? order.indexOf(c.stage) : order.length;
   const stages = STAGES.map(([k, label], i) => {
     if (miss && k === 'dialing') return `<li class="fail">${c.stage === 'blocked' ? '没打出去' : '没打通'}</li>`;
-    return `<li class="${i < at ? 'done' : i === at ? 'now' : ''}">${label}</li>`;
+    return `<li class="${i < at ? 'done' : i === at && !pending ? 'now' : ''}">${label}</li>`;
   }).join('');
   const live = ['dialing', 'talking', 'verifying'].includes(c.stage);
   const took = t?.startedAt ? Math.max(0, Math.round(((t.endedAt ? Date.parse(t.endedAt) : Date.now()) - Date.parse(t.startedAt)) / 1000)) : 0;
@@ -162,7 +163,7 @@ export function callLiveHtml(c, t) {
     <div class="bk-callhead">
       <span class="bk-ring${live ? ' live' : ''}">📞</span>
       <span class="bk-callwho"><b>${esc(c.shop)}</b><small>${esc(c.phone)}${c.attempt > 1 ? ` · 第 ${c.attempt} 次拨打` : ''}</small></span>
-      <span class="bk-callstate${miss || c.stage === 'waiting' ? ' warn' : ''}">${STAGE_TEXT[c.stage] || ''}${live && t ? ` <span data-elapsed="${esc(t.id)}">${fmtSecs(took)}</span>` : ''}</span>
+      <span class="bk-callstate${miss || pending || c.stage === 'waiting' ? ' warn' : ''}">${STAGE_TEXT[c.stage] || ''}${live && t ? ` <span data-elapsed="${esc(t.id)}">${fmtSecs(took)}</span>` : ''}</span>
     </div>
     <ol class="bk-stages">${stages}</ol>
     ${transcript}${note}

@@ -34,6 +34,7 @@ cd /srv/cattuan && sudo -u cattuan git pull && bash deploy/setup.sh
 | 账号 | `sudo -u cattuan node scripts/user.mjs add\|passwd\|list\|disable\|enable <名字>` |
 | 日志 | `journalctl -u cattuan-app -f`（`cattuan-sandbox`、`cattuan-search` 同理） |
 | 配置 | 额度、注册开关在 `/etc/cattuan.env`，模型 key 在 `agent-home/.env`，改完执行 `systemctl restart cattuan-app` |
+| 打电话 | 给 `cattuan` 用户装好木星外呼 CLI（`mt-jupiter-cli`），在 `/etc/cattuan.env` 里配 `JUPITER_CLI`（绝对路径）、`JUPITER_TENANT_ID`、`JUPITER_ROUTE_POINT`，服务器上一般没有 MOA 登录，鉴权用 `JUPITER_AUTH=token` 或 `command`（见 `agent-home/.env.example`），改完重启 `cattuan-app` |
 | 备份 | 每天 04:00 自动备份到 `/var/backups/cattuan/`，保留 14 天。手动备份：`sudo -u cattuan bash deploy/backup.sh` |
 | 恢复 | 1. `systemctl stop cattuan-app`<br>2. 解开备份包，用里面的 `data/` 覆盖 `app/data/`，`agent-home/` 覆盖 `agent-home/`<br>3. `chown -R cattuan:cattuan /srv/cattuan`<br>4. `systemctl start cattuan-app` |
 

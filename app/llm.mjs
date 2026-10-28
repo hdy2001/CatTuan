@@ -1,4 +1,4 @@
-// 不带工具的单次模型调用（OpenAI 兼容接口）：只给几处要一次性抽取 JSON 的地方用（目标页一句话建目标、模拟外呼编通话）。
+// 不带工具的单次模型调用（OpenAI 兼容接口）：只给几处要一次性抽取 JSON 的地方用（目标页一句话建目标、整理通话结果）。
 // 聊天和后台任务都走 agent/runtime.mjs 的 Pi 会话。
 import { wellFormedJson } from './core/util.mjs';
 

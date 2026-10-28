@@ -91,6 +91,17 @@ test('a profile can leave out a toolset, and attachments stay out of the model t
   assert.equal(calls.length, 1);
 });
 
+test('a tool can declare a longer time limit than the default', async (t) => {
+  const home = fixture();
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(home, 'config.yaml'), 'toolsets: [phone, memory]\n');
+  const services = { phone: async (args, { signal }) => { await new Promise((ok) => setTimeout(ok, 50)); signal.throwIfAborted(); return { dialed: true }; } };
+  const bridge = await createTools({ home, sessionId: 'task-t_slow', taskId: 't_slow', services }, { timeoutMs: 10 });
+  t.after(() => bridge.close());
+  const out = await bridge.tools.find((x) => x.name === 'phone_call').execute('id', { to: '010-1', name: '店', goal: '问问', mode: 'ask' });
+  assert.deepEqual(JSON.parse(out.content[0].text), { dialed: true }, 'phone_call runs past the 10 ms default');
+});
+
 test('network tools propagate cancellation and keep later calls usable', async (t) => {
   const home = fixture();
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));

@@ -1,7 +1,7 @@
 // 喵团 App：Muse 式「主 agent + 子 agent + 目标」。这里只把各模块接起来、起 HTTP 服务。
 //   agent/   主 agent（main.mjs，每个聊天一个 Pi 会话）、子 agent（worker.mjs）、共用的 runtime 和工具
 //   core/    每个人的状态、聊天、后台任务、目标、额度、浏览器实时画面
-//   calls/   打电话（Mock 外呼平台 + 通话记录）
+//   calls/   打电话（木星外呼平台 + 通话记录）
 //   http/    登录、接口、上传和图片代理
 // 场景上的做法（怎么说话、什么时候派子 agent、怎么打电话、怎么写报告）都在 agent-home 的提示词和技能里。
 import http from 'node:http';
@@ -35,7 +35,7 @@ export async function startApp({ config = loadConfig() } = {}) {
   const calls = createCalls({ llm });
   // 给工具用的 App 能力：打电话（记在发起它的任务上）
   const agents = createAgents({ config, services: (u, taskId) => ({
-    phone: (args, { progress }) => calls.place(u, u.state.tasks.find((t) => t.id === taskId), args, progress),
+    phone: (args, opts) => calls.place(u, u.state.tasks.find((t) => t.id === taskId), args, opts),
   }) });
   const worker = createWorker({ agents });
   let main, goals;
